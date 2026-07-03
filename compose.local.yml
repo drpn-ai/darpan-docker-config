@@ -1,0 +1,56 @@
+# Local runtime harness — NOT for production.
+#
+# Stands up Postgres + the darpan image with the six secrets the entrypoint hard-requires
+# (Moqui_DB_HOST/USER/PASSWORD/NAME, entity_ds_crypt_pass, JWT_KEY), so the container boots
+# past the fail-fast secret gate for local testing.
+#
+# Usage:
+#   1. Build/tag your image, then set DARPAN_IMAGE in docker/.env.local to that tag.
+#   2. cp docker/.env.local.example docker/.env.local   (a ready-to-use .env.local with
+#      generated secrets may already exist — it is git-ignored).
+#   3. From docker/:  docker compose -f compose.local.yml --env-file .env.local up
+#
+# The darpan service points at the bundled postgres. To use your OWN database instead, delete
+# the postgres service + depends_on and set Moqui_DB_HOST/USER/PASSWORD/NAME in .env.local.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${Moqui_DB_USER}
+      POSTGRES_PASSWORD: ${Moqui_DB_PASSWORD}
+      POSTGRES_DB: ${Moqui_DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - darpan_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  darpan:
+    image: ${DARPAN_IMAGE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # DB — points at the bundled postgres service by hostname.
+      Moqui_DB_HOST: postgres
+      Moqui_DB_USER: ${Moqui_DB_USER}
+      Moqui_DB_PASSWORD: ${Moqui_DB_PASSWORD}
+      Moqui_DB_NAME: ${Moqui_DB_NAME}
+      # Required secrets — MUST be stable across restarts against a persistent DB.
+      entity_ds_crypt_pass: ${entity_ds_crypt_pass}
+      JWT_KEY: ${JWT_KEY}
+      # Optional.
+      Moqui_HOST: ${Moqui_HOST:-localhost}
+      TIME_ZONE: ${TIME_ZONE:-UTC}
+      Moqui_WEBAPP_ALLOW_ORIGINS: ${Moqui_WEBAPP_ALLOW_ORIGINS:-}
+      # Y (default) loads darpan-seed idempotently on boot; set N for fast restarts.
+      DARPAN_LOAD_UPGRADE_DATA: ${DARPAN_LOAD_UPGRADE_DATA:-Y}
+    ports:
+      - "8080:8080"
+
+volumes:
+  darpan_pgdata:

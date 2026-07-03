@@ -1,0 +1,77 @@
+<moqui-conf xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-conf-3.xsd">
+
+    <default-property name="webapp_allow_origins" value="darpan-app-uat.hotwax.io,darpan-app.hotwax.io,darpan-uat.hotwax.io,darpan.hotwax.io,hotwax-darpan-dev.web.app,hotwax-darpan-dev.firebaseapp.com,hc-darpan-uat.web.app,hc-darpan-uat.firebaseapp.com,hc-darpan.web.app,hc-darpan.firebaseapp.com,app-uat.drpn.ai,app.drpn.ai"/>
+    <default-property name="entity_ds_db_conf" value="mysql"/>
+    <default-property name="entity_ds_host" value="127.0.0.1"/>
+    <default-property name="entity_ds_port" value="3306"/>
+    <default-property name="entity_ds_user" value="moqui"/>
+    <default-property name="entity_ds_password" value="moqui"/>
+    <default-property name="entity_ds_database" value="moqui"/>
+
+    <default-property name="webapp_http_host" value=""/>
+    <default-property name="webapp_http_port" value="80"/>
+    <default-property name="webapp_https_port" value="443"/>
+    <default-property name="webapp_https_enabled" value="true"/>
+
+    <!-- Property for setting timezone - configurable as part of Dockerfile  -->
+    <default-property name="default_time_zone" value=""/>
+    <default-property name="database_time_zone" value=""/>
+
+    <tools>
+        <tool-factory class="org.moqui.impl.tools.H2ServerToolFactory" init-priority="12" disabled="true"/>
+    </tools>
+    <!-- MACH P2 (observability): /rpc and /rest are the ENTIRE product API — skipping them gutted
+         inherited artifact-hit telemetry (latency/error visibility per service). Only /status
+         (health-probe noise, hit every few seconds by the orchestrator) stays excluded.
+         visit/visitor tracking stays off: stateless API, no server-side visit semantics. -->
+    <server-stats stats-skip-condition="pathInfo?.startsWith('/status')" visit-enabled="false" visitor-enabled="false"/>
+
+    <!-- JWT_KEY: deployment-unique signing secret for any Darpan JWT-based flows (wired from the
+         JWT_KEY env var, which is enforced non-empty by the container entrypoint).
+         Accessible at runtime via ec.factory.getProperty('jwt_signing_key') or ${jwt_signing_key}. -->
+    <default-property name="jwt_signing_key" value="${JWT_KEY}"/>
+
+    <!-- Crypt-key rotation: entity_ds_crypt_pass_old defaults to the current key when not set, making
+         the decrypt-alt entries a harmless no-op during normal operation. During a rotation window,
+         set entity_ds_crypt_pass_old to the outgoing key and entity_ds_crypt_pass to the new key.
+         See docs/crypt-key-rotation.md for the full procedure.
+         This value is expanded as a Groovy GString (SystemBinding), NOT by a shell — shell
+         `${var:-default}` syntax parses as a call to a method named `$` and crashes any process
+         whose environment lacks the var (e.g. `kubectl exec` data loads; the entrypoint's export
+         masks it for the server). Missing vars resolve to "" here, so Elvis gives the fallback. -->
+    <default-property name="entity_ds_crypt_pass_old" value="${entity_ds_crypt_pass_old ?: entity_ds_crypt_pass}"/>
+
+    <!-- NOTE: using the environment variable is relatively secure in a container environment, but for more security set it here instead -->
+    <!-- MACH Security P1: entity-facade includes decrypt-alt fallbacks (mirrors MoquiDefaultConf.xml
+         lines 433-436) so this prod-conf override does NOT lose the framework's dual-key rotation
+         support. Without these, a Moqui conf merge would discard the framework's decrypt-alt entries
+         and leave prod unable to decrypt old-key data during a crypt-key rotation. -->
+    <entity-facade crypt-pass="${entity_ds_crypt_pass}" query-stats="true">
+        <!-- Backward-compat decrypt: old algo (PBEWithMD5AndDES) with the current key.
+             Handles values written before the AES-128 migration. -->
+        <decrypt-alt crypt-salt="SkcorIuqom" crypt-iter="10" crypt-algo="PBEWithMD5AndDES" crypt-pass="${entity_ds_crypt_pass}"/>
+        <!-- Rotation-window decrypt: DES algo with the old key (no-op when entity_ds_crypt_pass_old == entity_ds_crypt_pass). -->
+        <decrypt-alt crypt-salt="SkcorIuqom" crypt-iter="10" crypt-algo="PBEWithMD5AndDES" crypt-pass="${entity_ds_crypt_pass_old}"/>
+        <!-- Rotation-window decrypt: AES-128 algo with the old key (no-op when entity_ds_crypt_pass_old == entity_ds_crypt_pass). -->
+        <decrypt-alt crypt-salt="20201202" crypt-iter="10" crypt-algo="PBEWithHmacSHA256AndAES_128" crypt-pass="${entity_ds_crypt_pass_old}"/>
+        <datasource group-name="transactional" database-conf-name="${entity_ds_db_conf}"
+                runtime-add-missing="${entity_add_missing_runtime}" startup-add-missing="${entity_add_missing_startup}">
+            <inline-jdbc pool-maxsize="140" xa-ds-class="com.mysql.cj.jdbc.MysqlXADataSource">
+                <!-- Audit 2026-06-11 #23: default to TLS so credentials and tenant reconciliation
+                     payloads are not sent in cleartext to a remote multi-tenant MySQL. Overridable
+                     via entity_ds_use_ssl / entity_ds_allow_pubkey for environments that genuinely
+                     cannot terminate TLS (a conscious, logged choice). allowPublicKeyRetrieval
+                     defaults off — it is only needed for caching_sha2_password over a non-TLS link. -->
+                <xa-properties pinGlobalTxToPhysicalConnection="true" autoReconnectForPools="true"
+                               useSSL="${entity_ds_use_ssl?:'true'}" allowPublicKeyRetrieval="${entity_ds_allow_pubkey?:'false'}"
+                               serverName="${entity_ds_host}" port="${entity_ds_port?:'3306'}"
+                               databaseName="${entity_ds_database}" user="${entity_ds_user}" password="${entity_ds_password}"/>
+            </inline-jdbc>
+        </datasource>
+    </entity-facade>
+
+    <component-list>
+        <component name="netsuite-darpan" location="component/netsuite-darpan"/>
+    </component-list>
+
+</moqui-conf>
