@@ -1,187 +1,125 @@
-# syntax=docker/dockerfile:1.6
+# Docker-first Darpan/Moqui image — `chelan` branch, prod track (product components pinned to release tags).
 #
-# Audit Wave 5 hardening (mirrors ../Dockerfile):
-#  - W5 #36 / 2026-06-11 #24: BASE_IMAGE default still names the latest tag for compatibility; CI/prod
-#    MUST override with a digest-pinned reference (`maarg-base-os@sha256:<d>`) for reproducible builds.
-#    A digest REQUIRES the `@` separator (a `:sha256:...` tag form is an invalid Docker reference), so
-#    BASE_IMAGE is a full reference. Set `--build-arg REQUIRE_PINNED_BASE=1` to FAIL the build unless
-#    BASE_IMAGE is digest-pinned.
-#  - W5 #37: GitHub credentials via BuildKit `--mount=type=secret` so they never land in image
-#    layer history. ARG GIT_USERNAME/GIT_PASSWORD remain as a backward-compat fallback during the
-#    CI rollout window.
-#  - W5 #38: Product refs pinned to tags (darpan v1.0.3 / darpan-hotwax v0.3.0 / shopify-darpan
-#    v0.3.0 / netsuite-darpan v0.2.0).
-#    moqui-framework / moqui-runtime / moqui-sftp are pinned in-file to stable immutable refs
-#    matching the dev baseline (see the ARG block); build args remain available but no override
-#    is required for a reproducible build.
-ARG BASE_IMAGE=600735190428.dkr.ecr.us-east-1.amazonaws.com/maarg-base-os:OS-22.04-latest
+# Modeled on the classic OFBiz single-stage Dockerfile: plain build args, .netrc for private
+# clones, tunable heap via JAVA_MIN/JAVA_MAX, simple ENV defaults, one EXPOSEd port, and an
+# entrypoint COPY'd from the build context. Intended for `docker build` + `docker run` /
+# docker compose directly — no BuildKit secrets, no digest-pin enforcement, no orchestrator
+# assumptions.
+#
+# Build from the repo root (the entrypoint and conf files are copied from the context):
+#   docker build \
+#     --build-arg GIT_USERNAME=<user> --build-arg GIT_PASSWORD=<token> \
+#     -f prod/Dockerfile -t darpan:chelan-prod .
+#
+# NOTE: unlike the BuildKit-secret build, GIT_USERNAME/GIT_PASSWORD are visible in
+# `docker history`. Use a short-lived, read-only token and treat the image as private.
 
-# JDK 21 provider stage. maarg-base-os ships JDK 11 as the default `java`, but Moqui 4, the upstream
-# framework's Gradle 9 (refuses to RUN on < JVM 17), and Spark 3.5 all require JDK 21. Copy a
-# self-contained Temurin 21 (Ubuntu/glibc — ABI-compatible with the 22.04 base) instead of depending
-# on the base image's apt sources. eclipse-temurin:21-jdk is the same JDK image docker/simple uses.
-FROM eclipse-temurin:21-jdk AS jdk21
-
-FROM ${BASE_IMAGE}
-
-ARG BASE_IMAGE
-ARG REQUIRE_PINNED_BASE=
-RUN set -e; \
-    if [ -n "$REQUIRE_PINNED_BASE" ] && ! printf '%s' "$BASE_IMAGE" | grep -q '@sha256:'; then \
-        echo "ERROR: BASE_IMAGE must be digest-pinned (e.g. .../maarg-base-os@sha256:<digest>) for CI/prod builds (got '$BASE_IMAGE')." >&2; \
-        exit 1; \
-    fi
+# eclipse-temurin:21-jdk (Ubuntu) — Moqui 4, Gradle 9, and Spark 3.5 all require JDK 21.
+FROM eclipse-temurin:21-jdk
 
 ARG GIT_USERNAME=
 ARG GIT_PASSWORD=
-# moqui-framework: pinned to d12a86e = upstream v4.0.0 + PR #705 (embed-bitronix), the merge this
-# stack requires (Bitronix is the default JTA TM; moqui-atomikos retired). The v4.0.0 tag predates
-# that merge by 6 commits, so no upstream tag contains Bitronix yet — re-pin to the first tag that
-# does. moqui-runtime v3.9.9 == dev baseline (upstream v4.0.0 adds Groovy 5 + Gradle bumps; adopt
-# in dev first, then bump here). moqui-sftp v1.0.3 is the latest upstream tag. All three are stable
-# immutable refs; no build-arg override is required.
+# JVM heap for the runtime JVM (MoquiStart). Fixed sizes, OFBiz-style — no cgroup percentages.
+ARG JAVA_MIN=1024m
+ARG JAVA_MAX=4096m
+
+# Source refs. moqui-framework is pinned to v4.0.0 + PR #705 (embedded Bitronix — the v4.0.0
+# tag predates that merge); moqui-runtime v3.9.9 is the dev baseline. Product components
+# pinned to release tags (reproducible production build); bump on each release.
 ARG MOQUI_FRAMEWORK_REF=d12a86e1ac735ae41d93b586bbcb789889997110
 ARG MOQUI_RUNTIME_REF=v3.9.9
-# moqui-atomikos retired: Moqui 4 embeds Bitronix as the default JTA TM; no separate Atomikos component needed.
 ARG MOQUI_SFTP_REF=v1.0.3
-# darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
-# no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
-# pre-reset refs.
 ARG DARPAN_REF=v1.0.3
-# darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
-# and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
-# this stack. v0.3.0 tags == the component mains that darpan CI proves against darpan v1.0.0.
 ARG DARPAN_HOTWAX_REF=v0.3.0
 ARG SHOPIFY_DARPAN_REF=v0.3.0
 ARG NETSUITE_DARPAN_REF=v0.2.0
-# moqui-gql has no release tag yet (Phase-0/1 component); pin to a tag before exposing the public tier.
 ARG MOQUI_GQL_REF=main
 
-WORKDIR /
+RUN apt-get update && apt-get install -y --no-install-recommends git curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Audit W5 #37 — credentials live only for the duration of this RUN, mounted from BuildKit's
-# secret store at /run/secrets/netrc. Collapsed into a single RUN so the credential file is
-# removed in the same layer that created it.
-RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
-    set -e; \
-    if [ -s /root/.netrc.secret ]; then \
-        cp /root/.netrc.secret /root/.netrc; \
-    else \
-        printf 'machine github.com\nlogin %s\npassword %s\n' "$GIT_USERNAME" "$GIT_PASSWORD" > /root/.netrc; \
-    fi; \
-    chmod 600 /root/.netrc; \
-    git init /moqui-framework && git -C /moqui-framework remote add origin https://github.com/moqui/moqui-framework.git && git -C /moqui-framework fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF" && git -C /moqui-framework checkout --detach FETCH_HEAD; \
-    git clone --depth 1 -b "$MOQUI_RUNTIME_REF"   https://github.com/moqui/moqui-runtime.git    /moqui-framework/runtime; \
-    git clone --depth 1 -b "$MOQUI_SFTP_REF"      https://github.com/moqui/moqui-sftp.git       /moqui-framework/runtime/component/moqui-sftp; \
-    git clone --depth 1 -b "$DARPAN_REF"          https://github.com/drpn-ai/darpan.git          /moqui-framework/runtime/component/darpan; \
-    git clone --depth 1 -b "$DARPAN_HOTWAX_REF"   https://github.com/drpn-ai/darpan-hotwax.git  /moqui-framework/runtime/component/darpan-hotwax; \
-    git clone --depth 1 -b "$SHOPIFY_DARPAN_REF"  https://github.com/drpn-ai/shopify-darpan.git /moqui-framework/runtime/component/shopify-darpan; \
-    git clone --depth 1 -b "$NETSUITE_DARPAN_REF" https://github.com/drpn-ai/netsuite-darpan.git /moqui-framework/runtime/component/netsuite-darpan; \
-    git clone --depth 1 -b "$MOQUI_GQL_REF"       https://github.com/drpn-ai/moqui-gql.git      /moqui-framework/runtime/component/moqui-gql; \
-    rm -f /root/.netrc
+# Store git credentials for private repo access
+RUN printf 'machine github.com\nlogin %s\npassword %s\n' "${GIT_USERNAME}" "${GIT_PASSWORD}" > /root/.netrc \
+    && chmod 600 /root/.netrc
+
+# Clone the framework at its pinned commit (git clone -b only takes branches/tags, so
+# fetch-by-sha), then the runtime and components into place.
+RUN git init /moqui-framework \
+    && git -C /moqui-framework remote add origin https://github.com/moqui/moqui-framework.git \
+    && git -C /moqui-framework fetch --depth 1 origin "${MOQUI_FRAMEWORK_REF}" \
+    && git -C /moqui-framework checkout --detach FETCH_HEAD
+
+RUN git clone --depth 1 -b "${MOQUI_RUNTIME_REF}"   https://github.com/moqui/moqui-runtime.git    /moqui-framework/runtime
+WORKDIR /moqui-framework/runtime/component
+RUN git clone --depth 1 -b "${MOQUI_SFTP_REF}"      https://github.com/moqui/moqui-sftp.git
+RUN git clone --depth 1 -b "${DARPAN_REF}"          https://github.com/drpn-ai/darpan.git
+RUN git clone --depth 1 -b "${DARPAN_HOTWAX_REF}"   https://github.com/drpn-ai/darpan-hotwax.git
+RUN git clone --depth 1 -b "${SHOPIFY_DARPAN_REF}"  https://github.com/drpn-ai/shopify-darpan.git
+RUN git clone --depth 1 -b "${NETSUITE_DARPAN_REF}" https://github.com/drpn-ai/netsuite-darpan.git
+RUN git clone --depth 1 -b "${MOQUI_GQL_REF}"       https://github.com/drpn-ai/moqui-gql.git
+
+# Remove git credentials from image filesystem (the ARG values remain in build metadata —
+# see the header note; use a disposable token)
+RUN rm -f /root/.netrc
 
 WORKDIR /moqui-framework
 
-# Fix 2026-06-27: GRADLE_USER_HOME must land inside /moqui-framework/ (already chowned to moqui)
-# so the non-root moqui user can write the Gradle distribution during addRuntime and upgrade-data loads.
-ENV GRADLE_USER_HOME=/moqui-framework/.gradle
+# Production conf + framework build.gradle patch come from THIS repo (the build context),
+# not from the cloned component — this repo is the source of truth for docker config.
+COPY ./MoquiProductionConf.xml runtime/conf/MoquiProductionConf.xml
+COPY ./buildGradle.patch buildGradle.patch
 
-# Make Temurin 21 the default JDK for BOTH the build (Gradle 9 needs JVM 17+; the addRuntime step
-# below fails on the base image's default JDK 11) and the runtime (`exec java` MoquiStart + the
-# entrypoint's gradlew upgrade-data load — Moqui 4 needs JDK 21). Overrides the base image's JDK 11.
-COPY --from=jdk21 /opt/java/openjdk /opt/java/openjdk
-ENV JAVA_HOME=/opt/java/openjdk
-ENV PATH="/opt/java/openjdk/bin:${PATH}"
-
-# Fail the build immediately if the active java is not JDK 21 (e.g. base-image PATH drift
-# re-exposing its bundled JDK 11). Everything downstream (Gradle 9, Moqui 4, Spark 3.5) requires 21.
-RUN java -version 2>&1 | grep -q 'version "21' \
-    || { echo "ERROR: active java is not JDK 21:" >&2; java -version >&2; exit 1; }
-
-# Copy production configuration file.
-RUN cp -rf runtime/component/darpan/docker/MoquiProductionConf.xml runtime/conf/
-# Guard the SameSite swap: if the upstream framework ever drops the LAX marker, this would silently
-# no-op and downgrade cookie policy. Fail the docker build instead.
+# Cross-site cookie policy: swap the SameSite marker to NONE (UI is served from a different
+# origin than the API). Fail the build if the upstream marker disappears rather than
+# silently downgrading cookie policy.
 RUN grep -q '__SAME_SITE_LAX__' framework/src/main/webapp/WEB-INF/web.xml \
     && sed -i 's/__SAME_SITE_LAX__/__SAME_SITE_NONE__/g' framework/src/main/webapp/WEB-INF/web.xml
-# Guard the framework build.gradle patch (adds the Spark --add-exports for JDK 17/21 and flips the
-# run/load tasks to append-form jvmArgs). The patch is coupled to the framework build.gradle structure
-# at MOQUI_FRAMEWORK_REF; if that ref is bumped and upstream build.gradle drifts, a bare `git apply`
-# fails with a cryptic "patch does not apply" at a line number. Dry-run first, fail loudly with a
-# regeneration hint, then apply for real.
-RUN git apply --check runtime/component/darpan/docker/buildGradle.patch 2>/dev/null \
-    || { echo "ERROR: buildGradle.patch no longer applies to moqui-framework @ ${MOQUI_FRAMEWORK_REF}." >&2; \
-         echo "       Upstream build.gradle has drifted from what the patch targets. Regenerate it:" >&2; \
-         echo "       check out moqui-framework at that ref, re-apply the Spark --add-exports +" >&2; \
-         echo "       append-form jvmArgs edits, then 'git diff build.gradle' >" >&2; \
-         echo "       runtime/component/darpan/docker/buildGradle.patch, and rebuild." >&2; \
-         exit 1; }; \
-    git apply runtime/component/darpan/docker/buildGradle.patch
 
-# Create WAR file. Build the moqui-gql engine jar FIRST: it contributes a GqlToolFactory loaded at
-# ECF init and vendors graphql-java into its lib/; nothing depends on it in the build graph, so
-# addRuntime alone would not build it and the server would fail to load the component at startup.
-RUN ./gradlew :runtime:component:moqui-gql:jar addRuntime
+# Framework build.gradle patch: Spark --add-exports for JDK 21 + append-form jvmArgs.
+# Dry-run first so ref drift fails loudly instead of with a cryptic line-number error.
+RUN git apply --check buildGradle.patch \
+    || { echo "ERROR: buildGradle.patch no longer applies to moqui-framework @ ${MOQUI_FRAMEWORK_REF}; regenerate it." >&2; exit 1; }
+RUN git apply buildGradle.patch
 
-# Extract WAR file.
+# Build. moqui-gql's engine jar must be built FIRST (it contributes a GqlToolFactory loaded
+# at ECF init and vendors graphql-java); addRuntime alone would not build it.
+ENV GRADLE_USER_HOME=/moqui-framework/.gradle
+RUN ./gradlew --no-daemon :runtime:component:moqui-gql:jar addRuntime
+
+# Extract the war so the entrypoint can `exec java -cp . MoquiStart` as PID 1.
 WORKDIR /moqui-deploy
-RUN cp /moqui-framework/runtime/component/darpan/docker/prod/entrypoint.sh /moqui-deploy/
-# P1 Observability: copy the JSON log4j2 config so the prod JVM emits structured JSON to STDOUT.
-# Activated below via -Dlog4j2.configurationFile. Local dev-stack.sh does NOT set this property
-# so developers keep the readable PatternLayout.
-RUN cp /moqui-framework/runtime/component/darpan/docker/log4j2-json.xml /moqui-deploy/log4j2-json.xml
+RUN jar -xf /moqui-framework/moqui-plus-runtime.war
 
-RUN chmod +x entrypoint.sh
-RUN jar -xvf /moqui-framework/moqui-plus-runtime.war
+# Copy entrypoint script (from the build context: fail-fast secret gate, sectioned conf
+# templating, Spark --add-opens, optional upgrade-data load)
+COPY ./prod/entrypoint.sh /moqui-deploy/entrypoint.sh
+RUN chmod +x /moqui-deploy/entrypoint.sh
 
-# DB_LOAD is the ops-runbook command for a first-time full DB load (entrypoint.sh does NOT run it).
-# darpan-seed-initial/darpan-seed must be INSIDE -Ptypes — loadProduction only forwards -Ptypes; a
-# -Praw flag is read by no gradle task (silent no-op). Loader flags go as MoquiStart args instead,
-# e.g.: java -jar moqui-plus-runtime.war load conf=$CONF_FILE types=darpan-seed dummy-fks
-ENV DB_LOAD="./gradlew loadProduction -Ptypes=seed,seed-initial,install,ext-seed,ext,darpan-seed-initial,darpan-seed"
-# Audit 2026-06-27 MACH P1 #1: replaced hardcoded -Xms512m/-Xmx4096m with cgroup-aware JDK 21
-# container support. JDK 21 respects cgroup v1/v2 memory limits by default (UseContainerSupport=true).
-# -XX:MaxRAMPercentage=75.0 caps the heap at 75 % of the container's cgroup limit (leaves headroom for
-# Metaspace, thread stacks, NIO direct buffers, and the OS). -XX:InitialRAMPercentage=25.0 avoids
-# over-eager reservation at start. Override the entire JAVA_OPTS env var at runtime to change these.
-# P1 Observability: -Dlog4j2.configurationFile activates the JSON STDOUT layout (log4j2-json.xml).
-# This overrides the upstream framework PatternLayout for prod without touching the upstream file.
-# The path is absolute inside the extracted WAR directory (/moqui-deploy).
-ENV JAVA_OPTS="-XX:InitialRAMPercentage=25.0 -XX:MaxRAMPercentage=75.0 -XX:MaxHeapSize=6g -Dlog4j2.configurationFile=/moqui-deploy/log4j2-json.xml"
+ENV JAVA_OPTS="-Xms${JAVA_MIN} -Xmx${JAVA_MAX} -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/moqui-framework/runtime/log/"
 ENV CONF_FILE="/moqui-framework/runtime/conf/MoquiProductionConf.xml"
-ENV SLEEP="sleep 2"
+ENV SLEEP=5
+
+# Runtime env contract — matches chelan/chelan-docker-config (git.hotwaxsystems.com), so Chelan
+# deploy manifests carry over unchanged. The entrypoint fails fast if the secrets are unset:
+#   DB_HOST / DB_USER / DB_PASSWORD / DB_NAME (DB_PORT defaults to 5432 — Chelan is Postgres)
+#   entity_ds_crypt_pass, JWT_KEY
+# Optional: HC_HOST, WEBAPP_ALLOW_ORIGINS, TIME_ZONE,
+#   DARPAN_LOAD_UPGRADE_DATA=N to skip the per-boot seed/upgrade data load.
 ENV JWT_KEY=
-ENV MOQUI_HOST=
-ENV Moqui_DB_HOST=
-ENV Moqui_DB_USER=
-ENV Moqui_DB_PASSWORD=
-ENV Moqui_DB_NAME=
-ENV Moqui_WEBAPP_ALLOW_ORIGINS="darpan-app-uat.hotwax.io,darpan-app.hotwax.io,darpan-uat.hotwax.io,darpan.hotwax.io,hotwax-darpan-dev.web.app,hotwax-darpan-dev.firebaseapp.com,hc-darpan-uat.web.app,hc-darpan-uat.firebaseapp.com,hc-darpan.web.app,hc-darpan.firebaseapp.com,app-uat.drpn.ai,app.drpn.ai"
+ENV HC_HOST=
+ENV DB_HOST=
+ENV DB_PORT=5432
+ENV DB_USER=
+ENV DB_PASSWORD=
+ENV DB_NAME=
 ENV WEBAPP_ALLOW_ORIGINS=
-ENV ELASTICSEARCH_HOST=
 ENV TIME_ZONE=
-
-# Audit 2026-06-26 MACH P0 #1: guarantee the healthcheck probe tool exists regardless of base-image
-# contents (idempotent — no-op when curl is already present).
-RUN command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*)
-
-# TEMP 2026-07-02 — non-root USER moqui (MACH P1 #1, 2026-06-27) removed: the UAT datamanager
-# volume carries root-owned run directories from pre-hardening images and the deployment does not
-# yet set securityContext.fsGroup, so uid-1000 writes failed (AccessDeniedException on new
-# reconciliation-run dirs). Container runs as root until then. REINSTATE the moqui user once the
-# pod spec sets fsGroup: 1000 (+ fsGroupChangePolicy: OnRootMismatch) or the volume ownership is
-# fixed via a one-time root init container; a pod securityContext with runAsNonRoot: true must also
-# be dropped while this is in effect.
 
 EXPOSE 8080
 
-# /status is bound to 127.0.0.1 (IP-allowlisted) and excluded from server-stats, so in-container health
-# polling is cheap and side-effect-free. start-period covers JVM boot + the per-boot upgrade-data load.
+# /status is bound to 127.0.0.1 and excluded from server-stats; start-period covers JVM boot
+# plus the per-boot upgrade-data load.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8080/status || exit 1
 
-# Audit 2026-06-26 MACH P0 #1: exec-form ENTRYPOINT so ./entrypoint.sh runs as PID 1 (no `/bin/sh -c`
-# wrapper); the script's trailing `exec java` then becomes PID 1 and receives SIGTERM directly for an
-# orderly Moqui shutdown + Bitronix XA flush. Dropped the dead `&& bash` (unreachable — `tail -F` never
-# returned; PID-1 java now holds the container open and `docker stop` works as intended).
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["/moqui-deploy/entrypoint.sh"]

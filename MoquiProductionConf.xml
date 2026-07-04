@@ -1,12 +1,17 @@
 <moqui-conf xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-conf-3.xsd">
 
+    <!-- Chelan runs Postgres (all Chelan infra is Postgres — see chelan/chelan-docker-config on
+         git.hotwaxsystems.com, whose entrypoints template jdbc:postgresql URLs). The entrypoint
+         seds the placeholder values below from DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME. -->
+
     <default-property name="webapp_allow_origins" value="darpan-app-uat.hotwax.io,darpan-app.hotwax.io,darpan-uat.hotwax.io,darpan.hotwax.io,hotwax-darpan-dev.web.app,hotwax-darpan-dev.firebaseapp.com,hc-darpan-uat.web.app,hc-darpan-uat.firebaseapp.com,hc-darpan.web.app,hc-darpan.firebaseapp.com,app-uat.drpn.ai,app.drpn.ai"/>
-    <default-property name="entity_ds_db_conf" value="mysql"/>
+    <default-property name="entity_ds_db_conf" value="postgres"/>
     <default-property name="entity_ds_host" value="127.0.0.1"/>
-    <default-property name="entity_ds_port" value="3306"/>
+    <default-property name="entity_ds_port" value="5432"/>
     <default-property name="entity_ds_user" value="moqui"/>
     <default-property name="entity_ds_password" value="moqui"/>
     <default-property name="entity_ds_database" value="moqui"/>
+    <default-property name="entity_ds_schema" value="public"/>
 
     <default-property name="webapp_http_host" value=""/>
     <default-property name="webapp_http_port" value="80"/>
@@ -54,17 +59,17 @@
         <decrypt-alt crypt-salt="SkcorIuqom" crypt-iter="10" crypt-algo="PBEWithMD5AndDES" crypt-pass="${entity_ds_crypt_pass_old}"/>
         <!-- Rotation-window decrypt: AES-128 algo with the old key (no-op when entity_ds_crypt_pass_old == entity_ds_crypt_pass). -->
         <decrypt-alt crypt-salt="20201202" crypt-iter="10" crypt-algo="PBEWithHmacSHA256AndAES_128" crypt-pass="${entity_ds_crypt_pass_old}"/>
-        <datasource group-name="transactional" database-conf-name="${entity_ds_db_conf}"
+        <datasource group-name="transactional" database-conf-name="${entity_ds_db_conf}" schema-name="${entity_ds_schema}"
                 runtime-add-missing="${entity_add_missing_runtime}" startup-add-missing="${entity_add_missing_startup}">
-            <inline-jdbc pool-maxsize="140" xa-ds-class="com.mysql.cj.jdbc.MysqlXADataSource">
-                <!-- Audit 2026-06-11 #23: default to TLS so credentials and tenant reconciliation
-                     payloads are not sent in cleartext to a remote multi-tenant MySQL. Overridable
-                     via entity_ds_use_ssl / entity_ds_allow_pubkey for environments that genuinely
-                     cannot terminate TLS (a conscious, logged choice). allowPublicKeyRetrieval
-                     defaults off — it is only needed for caching_sha2_password over a non-TLS link. -->
-                <xa-properties pinGlobalTxToPhysicalConnection="true" autoReconnectForPools="true"
-                               useSSL="${entity_ds_use_ssl?:'true'}" allowPublicKeyRetrieval="${entity_ds_allow_pubkey?:'false'}"
-                               serverName="${entity_ds_host}" port="${entity_ds_port?:'3306'}"
+            <inline-jdbc pool-maxsize="140" xa-ds-class="org.postgresql.xa.PGXADataSource">
+                <!-- Audit 2026-06-11 #23 (TLS to the DB by default): pgjdbc's sslMode=require encrypts
+                     the link without requiring CA verification. Override entity_ds_sslmode
+                     (disable|require|verify-ca|verify-full) for environments that genuinely cannot
+                     terminate TLS (a conscious, logged choice). The MySQL-driver-specific properties
+                     (pinGlobalTxToPhysicalConnection, autoReconnectForPools, useSSL,
+                     allowPublicKeyRetrieval) do not exist on PGXADataSource and must not appear here. -->
+                <xa-properties sslMode="${entity_ds_sslmode?:'require'}"
+                               serverName="${entity_ds_host}" portNumber="${entity_ds_port?:'5432'}"
                                databaseName="${entity_ds_database}" user="${entity_ds_user}" password="${entity_ds_password}"/>
             </inline-jdbc>
         </datasource>

@@ -1,4 +1,4 @@
-# Docker-first Darpan/Moqui image — `chelan` branch. Chelan deploys build from THIS branch.
+# Docker-first Darpan/Moqui image — `chelan` branch, UAT track (component refs default to main).
 #
 # Modeled on the classic OFBiz single-stage Dockerfile: plain build args, .netrc for private
 # clones, tunable heap via JAVA_MIN/JAVA_MAX, simple ENV defaults, one EXPOSEd port, and an
@@ -9,7 +9,7 @@
 # Build from the repo root (the entrypoint and conf files are copied from the context):
 #   docker build \
 #     --build-arg GIT_USERNAME=<user> --build-arg GIT_PASSWORD=<token> \
-#     -t darpan:chelan .
+#     -f uat/Dockerfile -t darpan:chelan-uat .
 #
 # NOTE: unlike the BuildKit-secret build, GIT_USERNAME/GIT_PASSWORD are visible in
 # `docker history`. Use a short-lived, read-only token and treat the image as private.
@@ -92,7 +92,7 @@ RUN jar -xf /moqui-framework/moqui-plus-runtime.war
 
 # Copy entrypoint script (from the build context: fail-fast secret gate, sectioned conf
 # templating, Spark --add-opens, optional upgrade-data load)
-COPY ./entrypoint.sh /moqui-deploy/entrypoint.sh
+COPY ./uat/entrypoint.sh /moqui-deploy/entrypoint.sh
 RUN chmod +x /moqui-deploy/entrypoint.sh
 
 ENV JAVA_OPTS="-Xms${JAVA_MIN} -Xmx${JAVA_MAX} -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/moqui-framework/runtime/log/"
