@@ -12,8 +12,8 @@
 #    during the rollout window; once CI is on `--secret id=netrc,...` they can be dropped.
 #  - W5 #38: Moqui framework / runtime / sftp refs are pinned in-file to stable immutable refs
 #    matching the dev baseline (see the ARG block); no build-arg override is required. Product
-#    components (darpan / darpan-hotwax / shopify-darpan / netsuite-darpan) default to `main` on
-#    this UAT-track image by design; `prod/Dockerfile` pins them to release tags.
+#    components (darpan / darpan-hotwax / shopify-darpan / netsuite-darpan / database-darpan) default
+#    to `main` on this UAT-track image by design; `prod/Dockerfile` pins them to release tags.
 ARG BASE_IMAGE=public.ecr.aws/j6s7y7u4/hotwax/ubuntu:22.04
 
 # JDK 21 provider stage. The default base ships no JDK 21 (maarg-base-os had JDK 11), but Moqui 4, the upstream
@@ -52,6 +52,7 @@ ARG DARPAN_REF=main
 ARG DARPAN_HOTWAX_REF=main
 ARG SHOPIFY_DARPAN_REF=main
 ARG NETSUITE_DARPAN_REF=main
+ARG DATABASE_DARPAN_REF=main
 ARG MOQUI_GQL_REF=main
 
 WORKDIR /
@@ -76,6 +77,7 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
     git clone --depth 1 -b "$DARPAN_HOTWAX_REF"   https://github.com/drpn-ai/darpan-hotwax.git  /moqui-framework/runtime/component/darpan-hotwax; \
     git clone --depth 1 -b "$SHOPIFY_DARPAN_REF"  https://github.com/drpn-ai/shopify-darpan.git /moqui-framework/runtime/component/shopify-darpan; \
     git clone --depth 1 -b "$NETSUITE_DARPAN_REF" https://github.com/drpn-ai/netsuite-darpan.git /moqui-framework/runtime/component/netsuite-darpan; \
+    git clone --depth 1 -b "$DATABASE_DARPAN_REF" https://github.com/drpn-ai/database-darpan.git /moqui-framework/runtime/component/database-darpan; \
     git clone --depth 1 -b "$MOQUI_GQL_REF"       https://github.com/drpn-ai/moqui-gql.git      /moqui-framework/runtime/component/moqui-gql; \
     rm -f /root/.netrc
 
