@@ -33,6 +33,7 @@ ARG DARPAN_REF=main
 ARG DARPAN_HOTWAX_REF=main
 ARG SHOPIFY_DARPAN_REF=main
 ARG NETSUITE_DARPAN_REF=main
+ARG DATABASE_DARPAN_REF=main
 ARG MOQUI_GQL_REF=main
 
 RUN apt-get update && apt-get install -y --no-install-recommends git curl \
@@ -56,6 +57,7 @@ RUN git clone --depth 1 -b "${DARPAN_REF}"          https://github.com/drpn-ai/d
 RUN git clone --depth 1 -b "${DARPAN_HOTWAX_REF}"   https://github.com/drpn-ai/darpan-hotwax.git
 RUN git clone --depth 1 -b "${SHOPIFY_DARPAN_REF}"  https://github.com/drpn-ai/shopify-darpan.git
 RUN git clone --depth 1 -b "${NETSUITE_DARPAN_REF}" https://github.com/drpn-ai/netsuite-darpan.git
+RUN git clone --depth 1 -b "${DATABASE_DARPAN_REF}" https://github.com/drpn-ai/database-darpan.git
 RUN git clone --depth 1 -b "${MOQUI_GQL_REF}"       https://github.com/drpn-ai/moqui-gql.git
 
 # Remove git credentials from image filesystem (the ARG values remain in build metadata —
