@@ -47,12 +47,14 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v1.0.3
+ARG DARPAN_REF=v1.1.0
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
-# this stack. v0.3.0 tags == the component mains that darpan CI proves against darpan v1.0.0.
-ARG DARPAN_HOTWAX_REF=v0.3.0
-ARG SHOPIFY_DARPAN_REF=v0.3.0
+# this stack. v0.4.0 tags == the component mains cut with darpan v1.1.0 (the seeded connector
+# registry rows reference lookup#ShopifyOrderIds and the keepRecordFields extract param, both
+# introduced in v0.4.0 — move these pins together with DARPAN_REF).
+ARG DARPAN_HOTWAX_REF=v0.4.0
+ARG SHOPIFY_DARPAN_REF=v0.4.0
 ARG NETSUITE_DARPAN_REF=v0.2.0
 # moqui-gql has no release tag yet (Phase-0/1 component); pin to a tag before exposing the public tier.
 ARG MOQUI_GQL_REF=main
