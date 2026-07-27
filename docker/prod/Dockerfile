@@ -98,8 +98,11 @@ ENV PATH="/opt/java/openjdk/bin:${PATH}"
 RUN java -version 2>&1 | grep -q 'version "21' \
     || { echo "ERROR: active java is not JDK 21:" >&2; java -version >&2; exit 1; }
 
-# Copy production configuration file.
-RUN cp -rf runtime/component/darpan/docker/MoquiProductionConf.xml runtime/conf/
+# Copy production configuration from the BUILD CONTEXT (repo root of darpan-docker-config —
+# build with `docker build -f docker/prod/Dockerfile .`). This repo is the sole home of the
+# Docker config; the darpan component's embedded docker/ directory was removed 2026-07-04
+# (1af89e7), so nothing may be copied out of the cloned component anymore.
+COPY docker/MoquiProductionConf.xml runtime/conf/
 # Guard the SameSite swap: if the upstream framework ever drops the LAX marker, this would silently
 # no-op and downgrade cookie policy. Fail the docker build instead.
 RUN grep -q '__SAME_SITE_LAX__' framework/src/main/webapp/WEB-INF/web.xml \
@@ -109,14 +112,15 @@ RUN grep -q '__SAME_SITE_LAX__' framework/src/main/webapp/WEB-INF/web.xml \
 # at MOQUI_FRAMEWORK_REF; if that ref is bumped and upstream build.gradle drifts, a bare `git apply`
 # fails with a cryptic "patch does not apply" at a line number. Dry-run first, fail loudly with a
 # regeneration hint, then apply for real.
-RUN git apply --check runtime/component/darpan/docker/buildGradle.patch 2>/dev/null \
+COPY docker/buildGradle.patch /tmp/buildGradle.patch
+RUN git apply --check /tmp/buildGradle.patch 2>/dev/null \
     || { echo "ERROR: buildGradle.patch no longer applies to moqui-framework @ ${MOQUI_FRAMEWORK_REF}." >&2; \
          echo "       Upstream build.gradle has drifted from what the patch targets. Regenerate it:" >&2; \
          echo "       check out moqui-framework at that ref, re-apply the Spark --add-exports +" >&2; \
          echo "       append-form jvmArgs edits, then 'git diff build.gradle' >" >&2; \
-         echo "       runtime/component/darpan/docker/buildGradle.patch, and rebuild." >&2; \
+         echo "       docker/buildGradle.patch in darpan-docker-config, and rebuild." >&2; \
          exit 1; }; \
-    git apply runtime/component/darpan/docker/buildGradle.patch
+    git apply /tmp/buildGradle.patch && rm -f /tmp/buildGradle.patch
 
 # Create WAR file. Build the moqui-gql engine jar FIRST: it contributes a GqlToolFactory loaded at
 # ECF init and vendors graphql-java into its lib/; nothing depends on it in the build graph, so
@@ -125,11 +129,11 @@ RUN ./gradlew :runtime:component:moqui-gql:jar addRuntime
 
 # Extract WAR file.
 WORKDIR /moqui-deploy
-RUN cp /moqui-framework/runtime/component/darpan/docker/prod/entrypoint.sh /moqui-deploy/
+COPY docker/prod/entrypoint.sh /moqui-deploy/entrypoint.sh
 # P1 Observability: copy the JSON log4j2 config so the prod JVM emits structured JSON to STDOUT.
 # Activated below via -Dlog4j2.configurationFile. Local dev-stack.sh does NOT set this property
 # so developers keep the readable PatternLayout.
-RUN cp /moqui-framework/runtime/component/darpan/docker/log4j2-json.xml /moqui-deploy/log4j2-json.xml
+COPY docker/log4j2-json.xml /moqui-deploy/log4j2-json.xml
 
 RUN chmod +x entrypoint.sh
 RUN jar -xvf /moqui-framework/moqui-plus-runtime.war
