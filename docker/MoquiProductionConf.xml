@@ -1,7 +1,10 @@
 <moqui-conf xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-conf-3.xsd">
 
     <default-property name="webapp_allow_origins" value="darpan-app-uat.hotwax.io,darpan-app.hotwax.io,darpan-uat.hotwax.io,darpan.hotwax.io,hotwax-darpan-dev.web.app,hotwax-darpan-dev.firebaseapp.com,hc-darpan-uat.web.app,hc-darpan-uat.firebaseapp.com,hc-darpan.web.app,hc-darpan.firebaseapp.com,app-uat.drpn.ai,app.drpn.ai"/>
-    <default-property name="entity_ds_db_conf" value="mysql"/>
+    <!-- mysql8 (com.mysql.cj.* driver/XA classes), NOT the legacy "mysql" entry: its
+         com.mysql.jdbc.* class names do not exist in Connector/J 8.x/9.x and any environment
+         falling back to this default would fail to boot. -->
+    <default-property name="entity_ds_db_conf" value="mysql8"/>
     <default-property name="entity_ds_host" value="127.0.0.1"/>
     <default-property name="entity_ds_port" value="3306"/>
     <default-property name="entity_ds_user" value="moqui"/>
