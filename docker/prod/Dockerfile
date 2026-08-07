@@ -47,17 +47,19 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v1.3.0
+ARG DARPAN_REF=v1.4.0
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
 # registry rows reference healthCheckServiceName probes, pairLookupServiceName, and the Shopify
 # exchange-state/sweep lookups, all introduced in v0.5.0 — move these pins together with
 # DARPAN_REF).
-# darpan v1.3.0 seeds filterParameterName="sourceFilters" onto the OMS connector row; only
-# darpan-hotwax v0.6.0 reads that parameter, so DARPAN_HOTWAX_REF moves with DARPAN_REF.
-# shopify-darpan stays at v0.5.0 — it has no commits since that tag and accepts no filter parameter.
-ARG DARPAN_HOTWAX_REF=v0.6.0
+# darpan v1.4.0 seeds the OMS_TRANSFER_ORDERS connector registry row, whose extractServiceName and
+# remoteSendServiceName both name extract#HotWaxOmsTransferOrders — a service that exists only in
+# darpan-hotwax v0.7.0. A v1.4.0/v0.6.0 pairing seeds a connector row pointing at a service the
+# image does not contain, so DARPAN_HOTWAX_REF moves with DARPAN_REF.
+# shopify-darpan stays at v0.5.0 and netsuite-darpan at v0.2.0 — neither has commits in this range.
+ARG DARPAN_HOTWAX_REF=v0.7.0
 ARG SHOPIFY_DARPAN_REF=v0.5.0
 ARG NETSUITE_DARPAN_REF=v0.2.0
 # moqui-gql has no release tag yet (Phase-0/1 component); pin to a tag before exposing the public tier.
