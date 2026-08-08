@@ -66,10 +66,33 @@ ARG MOQUI_FRAMEWORK_REF=master
 ARG MOQUI_RUNTIME_REF=v3.9.9
 # moqui-atomikos retired: Moqui 4 embeds Bitronix as the default JTA TM; no separate Atomikos component needed.
 ARG MOQUI_SFTP_REF=v1.0.3
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# TESTING VARIANT — tag v0.0.2 (supersedes 0.0.1). The four drpn-ai product components track `main`
+# instead of release tags, so a prod-shaped image can be built from unreleased code. Everything else
+# is the production build unchanged: the same hardened base image, prod entrypoint, JSON logging,
+# and the prod CORS allowlist (which, unlike docker/Dockerfile, does NOT carry the `*` wildcard).
+#
+# This variant is NOT a release recipe and deliberately does not live on main:
+#   - The image is not reproducible. `main` moves, so the same tag builds different images on
+#     different days. The tag pins the recipe, not the result — record the component commit SHAs
+#     from the build log if you need to know what you actually deployed.
+#   - Nothing here has been through a release cut. Whatever is on main at build time ships, including
+#     work that has not been release-tested.
+# Build a real release from main, where these refs stay pinned to tags.
+#
+# The moqui refs above are NOT moved by this variant, and they are not all the same kind of thing:
+#   - MOQUI_FRAMEWORK_REF=master is the drpn-ai FORK's master (cloned from drpn-ai/moqui-framework
+#     below), so it already IS this project's code — it carries the login/UserLoginKey deadlock fix.
+#     Corrected 2026-08-20: an earlier version of this note called it upstream, which it stopped
+#     being when f73f181 repointed the pins at the fork.
+#   - MOQUI_RUNTIME_REF / MOQUI_SFTP_REF are genuinely upstream moqui/* and stay pinned to tags;
+#     MOQUI_RUNTIME_REF in particular is held at v3.9.9 pending the Groovy 5 / Gradle bump.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+#
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
-# pre-reset refs.
-ARG DARPAN_REF=v1.4.0
+# pre-reset refs. Released prod pins this to a tag (v1.4.0 as of this branch point).
+ARG DARPAN_REF=main
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -81,9 +104,13 @@ ARG DARPAN_REF=v1.4.0
 # darpan-hotwax v0.7.0. A v1.4.0/v0.6.0 pairing seeds a connector row pointing at a service the
 # image does not contain, so DARPAN_HOTWAX_REF moves with DARPAN_REF.
 # shopify-darpan stays at v0.5.0 and netsuite-darpan at v0.2.0 — neither has commits in this range.
-ARG DARPAN_HOTWAX_REF=v0.7.0
-ARG SHOPIFY_DARPAN_REF=v0.5.0
-ARG NETSUITE_DARPAN_REF=v0.2.0
+# On this testing variant all four move together to main, which keeps that pairing rule satisfied by
+# construction: every component is at its own latest, so a seeded connector row cannot reference a
+# service that a differently-pinned sibling does not contain. Released prod pins these to tags
+# (v0.7.0 / v0.5.0 / v0.2.0 as of this branch point).
+ARG DARPAN_HOTWAX_REF=main
+ARG SHOPIFY_DARPAN_REF=main
+ARG NETSUITE_DARPAN_REF=main
 # moqui-gql has no release tag yet (Phase-0/1 component); pin to a tag before exposing the public tier.
 ARG MOQUI_GQL_REF=main
 
