@@ -34,13 +34,29 @@ RUN set -e; \
 
 ARG GIT_USERNAME=
 ARG GIT_PASSWORD=
-# moqui-framework: pinned to d12a86e = upstream v4.0.0 + PR #705 (embed-bitronix), the merge this
-# stack requires (Bitronix is the default JTA TM; moqui-atomikos retired). The v4.0.0 tag predates
-# that merge by 6 commits, so no upstream tag contains Bitronix yet — re-pin to the first tag that
-# does. moqui-runtime v3.9.9 == dev baseline (upstream v4.0.0 adds Groovy 5 + Gradle bumps; adopt
-# in dev first, then bump here). moqui-sftp v1.0.3 is the latest upstream tag. All three are stable
+# moqui-framework: pinned to the drpn-ai FORK, tag v4.0.0-drpn.1 (annotated; dereferences to
+# c618faf1). That tag is d12a86e — upstream v4.0.0 + PR #705 (embed-bitronix), the merge this stack
+# requires, since Bitronix is the default JTA TM and moqui-atomikos is retired — PLUS one commit:
+# the login self-deadlock fix in MoquiShiroRealm. Without that fix, the reset UPDATE holds an X lock
+# on USER_ACCOUNT while the FK-child UserLoginKey insert runs in a suspended transaction, so every
+# returning user's login stalls until innodb_lock_wait_timeout. That is a PRODUCTION defect, which
+# is why this pin moves here and not only in the dev/UAT image. Upstream has neither the fix nor any
+# tag containing Bitronix (the v4.0.0 tag predates that merge by 6 commits).
+#
+# Why a TAG and not the branch or the raw SHA: the RUN below does
+# `git fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF"`, which needs the ref to be reachable on the
+# remote. A raw SHA is not fetchable by default, and the fork branch it currently sits on
+# (fix/login-userloginkey-deadlock) will be rebased or deleted once the fix goes upstream — either
+# would break this production image build. The tag is immutable and survives both.
+#
+# RETIREMENT: when the fix is merged upstream, repoint this ARG, docker/Dockerfile, and the darpan
+# component's .github/workflows/ci.yml framework clone at an upstream ref that contains it, and drop
+# the fork. All three must move together, or CI stops testing what production actually runs.
+#
+# moqui-runtime v3.9.9 == dev baseline (upstream v4.0.0 adds Groovy 5 + Gradle bumps; adopt in dev
+# first, then bump here). moqui-sftp v1.0.3 is the latest upstream tag. All three are stable
 # immutable refs; no build-arg override is required.
-ARG MOQUI_FRAMEWORK_REF=d12a86e1ac735ae41d93b586bbcb789889997110
+ARG MOQUI_FRAMEWORK_REF=v4.0.0-drpn.1
 ARG MOQUI_RUNTIME_REF=v3.9.9
 # moqui-atomikos retired: Moqui 4 embeds Bitronix as the default JTA TM; no separate Atomikos component needed.
 ARG MOQUI_SFTP_REF=v1.0.3
@@ -78,7 +94,7 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
         printf 'machine github.com\nlogin %s\npassword %s\n' "$GIT_USERNAME" "$GIT_PASSWORD" > /root/.netrc; \
     fi; \
     chmod 600 /root/.netrc; \
-    git init /moqui-framework && git -C /moqui-framework remote add origin https://github.com/moqui/moqui-framework.git && git -C /moqui-framework fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF" && git -C /moqui-framework checkout --detach FETCH_HEAD; \
+    git init /moqui-framework && git -C /moqui-framework remote add origin https://github.com/drpn-ai/moqui-framework.git && git -C /moqui-framework fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF" && git -C /moqui-framework checkout --detach FETCH_HEAD; \
     git clone --depth 1 -b "$MOQUI_RUNTIME_REF"   https://github.com/moqui/moqui-runtime.git    /moqui-framework/runtime; \
     git clone --depth 1 -b "$MOQUI_SFTP_REF"      https://github.com/moqui/moqui-sftp.git       /moqui-framework/runtime/component/moqui-sftp; \
     git clone --depth 1 -b "$DARPAN_REF"          https://github.com/drpn-ai/darpan.git          /moqui-framework/runtime/component/darpan; \
