@@ -38,19 +38,25 @@ RUN set -e; \
 
 ARG GIT_USERNAME=
 ARG GIT_PASSWORD=
-# moqui-framework: pinned to the drpn-ai FORK, tag v4.0.0-drpn.1 (annotated; dereferences to
-# c618faf1). That tag is d12a86e — upstream v4.0.0 + PR #705 (embed-bitronix), the merge this stack
-# requires, since Bitronix is the default JTA TM and moqui-atomikos is retired — PLUS one commit:
-# the login self-deadlock fix in MoquiShiroRealm. Without that fix, the reset UPDATE holds an X lock
-# on USER_ACCOUNT while the FK-child UserLoginKey insert runs in a suspended transaction, so every
-# returning user's login stalls until innodb_lock_wait_timeout. Upstream has neither the fix nor any
-# tag containing Bitronix (the v4.0.0 tag predates that merge by 6 commits).
+# moqui-framework: pinned to the drpn-ai FORK, branch master. That branch is upstream v4.0.0 +
+# PR #705 (embed-bitronix), the merge this stack requires, since Bitronix is the default JTA TM and
+# moqui-atomikos is retired — PLUS the login self-deadlock fix, merged to the fork's mainline as
+# 8cde954b. Without that fix a login deadlocks against itself: getLoginKey issued the FK-child
+# UserLoginKey insert under requireNewTransaction, which SUSPENDS a caller already holding an X lock
+# on the parent USER_ACCOUNT row, so the insert waits on its own caller until
+# innodb_lock_wait_timeout. Upstream has neither the fix nor any tag containing Bitronix (the v4.0.0
+# tag predates that merge by 6 commits).
 #
-# Why a TAG and not the branch or the raw SHA: the RUN below does
-# `git fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF"`, which needs the ref to be reachable on the
-# remote. A raw SHA is not fetchable by default, and the fork branch it currently sits on
-# (fix/login-userloginkey-deadlock) will be rebased or deleted once the fix goes upstream — either
-# would break this image build. The tag is immutable and survives both.
+# Why the fork's master and not a tag: the RUN below does
+# `git fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF"`, which needs a ref the remote can resolve, and
+# a raw SHA is not fetchable by default. This replaced tag v4.0.0-drpn.1 on 2026-08-18 — that tag
+# dereferences to c618faf1 and so PREDATES the getLoginKey fix; anything still pinned to it ships
+# the deadlock.
+#
+# TRADE-OFF, and it is a real one: master MOVES. This build is no longer reproducible — a rebuild
+# later resolves to whatever the fork's master is at that moment, including upstream commits merged
+# in since, and a force-push to the fork is followed silently. For a byte-identical rebuild, pass an
+# immutable SHA: `--build-arg MOQUI_FRAMEWORK_REF=8cde954b` (the merge that carried the fix).
 #
 # RETIREMENT: when the fix is merged upstream, repoint this ARG, docker/prod/Dockerfile, and the
 # darpan component's .github/workflows/ci.yml framework clone at an upstream ref that contains it,
@@ -59,9 +65,9 @@ ARG GIT_PASSWORD=
 # pinned to the same framework tag on purpose.)
 #
 # moqui-runtime v3.9.9 == dev baseline (upstream v4.0.0 adds Groovy 5 + Gradle bumps; adopt in dev
-# first, then bump here). moqui-sftp v1.0.3 is the latest upstream tag. All three are stable
-# immutable refs; no build-arg override is required.
-ARG MOQUI_FRAMEWORK_REF=v4.0.0-drpn.1
+# first, then bump here). moqui-sftp v1.0.3 is the latest upstream tag. Those two are stable
+# immutable refs; MOQUI_FRAMEWORK_REF above is NOT — see the trade-off note.
+ARG MOQUI_FRAMEWORK_REF=master
 ARG MOQUI_RUNTIME_REF=v3.9.9
 # moqui-atomikos retired: Moqui 4 embeds Bitronix as the default JTA TM; no separate Atomikos component needed.
 ARG MOQUI_SFTP_REF=v1.0.3
