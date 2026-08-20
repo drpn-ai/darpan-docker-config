@@ -86,7 +86,7 @@ $SLEEP
 # The default (Y) is deliberately preserved so the first deployment of a new image is
 # safe out-of-the-box; only suppress it once the deploy pipeline runs the load separately.
 if [ "${DARPAN_LOAD_UPGRADE_DATA:-Y}" != "N" ]; then
-  echo "Loading Darpan upgrade data"
+  echo "Ensuring Darpan seed/reference data present (idempotent load of all darpan-seed data)"
   DARPAN_MOQUI_FRAMEWORK_DIR="${DARPAN_MOQUI_FRAMEWORK_DIR:-/moqui-framework}"
   # Fix 2026-07-02: Gradle 9 removed -b/--build-file ("Unknown command-line option '-b'"), so the
   # component task can no longer be run standalone against its build file. The framework
@@ -95,7 +95,22 @@ if [ "${DARPAN_LOAD_UPGRADE_DATA:-Y}" != "N" ]; then
   DARPAN_UPGRADE_DATA_TASK="${DARPAN_UPGRADE_DATA_TASK:-:runtime:component:darpan:loadDarpanUpgradeData}"
   DARPAN_GRADLEW="${DARPAN_GRADLEW:-$DARPAN_MOQUI_FRAMEWORK_DIR/gradlew}"
   DARPAN_UPGRADE_DATA_TYPES="${DARPAN_UPGRADE_DATA_TYPES:-darpan-seed}"
-  DARPAN_UPGRADE_DATA_LOCATION="${DARPAN_UPGRADE_DATA_LOCATION:-component://darpan/data/upgrade-data.xml}"
+  # Load ALL darpan-seed files by type (no fixed location) so every base reference file + any NEW seed
+  # data file is applied idempotently — a Moqui data load is an upsert, so it checks each record's
+  # presence and inserts only what is missing. Test/UAT data uses type "darpan-fixture" and is excluded.
+  # Set DARPAN_UPGRADE_DATA_LOCATION only to force a single file.
+  #
+  # Fix 2026-08-20: this used to default to component://darpan/data/upgrade-data.xml and pass
+  # -PupgradeDataLocation unconditionally, which pinned every prod deploy to ONE release-scoped file.
+  # Records living only in data/releases/<ver>/upgrade-data.xml or a base seed file could therefore
+  # never reach an existing database — DB_LOAD (full types) is first-time-only by design, so upgrades
+  # silently received nothing new. Caught when 1.5.0 config sharing failed on sm-darpan with an FK
+  # violation on config_tenant_access_ibfk_2: the SCFG_* Enumeration rows had never loaded. This now
+  # matches docker/entrypoint.sh and the loadDarpanUpgradeData task's own default.
+  #
+  # NOTE: ${VAR:-default} substitutes on unset OR empty, so passing DARPAN_UPGRADE_DATA_LOCATION=""
+  # could never have overridden the old pin — only a non-empty value could.
+  DARPAN_UPGRADE_DATA_LOCATION="${DARPAN_UPGRADE_DATA_LOCATION:-}"
   load_args=(
     --no-daemon
     "$DARPAN_UPGRADE_DATA_TASK"
@@ -103,8 +118,10 @@ if [ "${DARPAN_LOAD_UPGRADE_DATA:-Y}" != "N" ]; then
     "-PmoquiRuntime=$DARPAN_MOQUI_FRAMEWORK_DIR/runtime"
     "-PmoquiWar=$DARPAN_MOQUI_FRAMEWORK_DIR/moqui-plus-runtime.war"
     "-Ptypes=$DARPAN_UPGRADE_DATA_TYPES"
-    "-PupgradeDataLocation=$DARPAN_UPGRADE_DATA_LOCATION"
   )
+  if [ -n "$DARPAN_UPGRADE_DATA_LOCATION" ]; then
+    load_args+=("-PupgradeDataLocation=$DARPAN_UPGRADE_DATA_LOCATION")
+  fi
   if [ -n "${DARPAN_UPGRADE_DATA_LOAD_ARGS:-}" ]; then
     load_args+=("-PextraLoadArgs=$DARPAN_UPGRADE_DATA_LOAD_ARGS")
   fi
