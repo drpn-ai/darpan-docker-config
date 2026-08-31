@@ -69,7 +69,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v1.5.0
+ARG DARPAN_REF=v1.5.1
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -80,9 +80,15 @@ ARG DARPAN_REF=v1.5.0
 # remoteSendServiceName both name extract#HotWaxOmsTransferOrders — a service that exists only in
 # darpan-hotwax v0.7.0. A v1.4.0/v0.6.0 pairing seeds a connector row pointing at a service the
 # image does not contain, so DARPAN_HOTWAX_REF moves with DARPAN_REF.
-# netsuite-darpan stays at v0.2.0 — no commits in this range.
+# netsuite-darpan stays at v0.2.0 — no commits in this range. darpan-hotwax stays at v0.8.0 for
+# the same reason across 1.5.0..1.5.1.
+# darpan v1.5.1 seeds the SHOPIFY_RETURN_REFS rules-board pill $.records[*].returnWorkflowStatus,
+# a field emitted only by shopify-darpan v0.6.1. Pinning v1.5.1 against v0.6.0 gives a pill whose
+# field is absent from the extract, so every exclusion rule on it matches nothing and reports
+# excludedCount 0 — indistinguishable from a feature that was never deployed. SHOPIFY_DARPAN_REF
+# moves with DARPAN_REF.
 ARG DARPAN_HOTWAX_REF=v0.8.0
-ARG SHOPIFY_DARPAN_REF=v0.6.0
+ARG SHOPIFY_DARPAN_REF=v0.6.1
 ARG NETSUITE_DARPAN_REF=v0.2.0
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
