@@ -69,7 +69,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v1.5.1
+ARG DARPAN_REF=v2.0.0
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -87,14 +87,24 @@ ARG DARPAN_REF=v1.5.1
 # field is absent from the extract, so every exclusion rule on it matches nothing and reports
 # excludedCount 0 — indistinguishable from a feature that was never deployed. SHOPIFY_DARPAN_REF
 # moves with DARPAN_REF.
-ARG DARPAN_HOTWAX_REF=v0.8.0
-ARG SHOPIFY_DARPAN_REF=v0.6.1
-ARG NETSUITE_DARPAN_REF=v0.2.0
+# darpan v2.0.0 moves ALL THREE connector pins. Its upgrade data seeds six connector rows whose
+# extractServiceName exists only in the new connector tags: OMS_GQL, OMS_RETURNS_GQL,
+# OMS_ORDER_ITEMS and OMS_ORDER_LINE_UNITS (extract#HotWaxOmsGql{Orders,Returns},
+# extract#HotWaxOmsOrder{Items,LineUnits}, darpan-hotwax v0.9.0), SHOPIFY_ORDER_LINE_UNITS
+# (extract#ShopifyOrderLineUnits, shopify-darpan v0.7.0) and NETSUITE_SUITEQL
+# (extract#NetSuiteOrders, netsuite-darpan v0.3.0). The connectors also read darpan 2.0's
+# filter verdict (DAR-BE-054 removed firstMatchingRule), so the pairing holds in both directions:
+# neither the old connectors against v2.0.0 nor the new connectors against v1.5.1 is a valid image.
+ARG DARPAN_HOTWAX_REF=v0.9.0
+ARG SHOPIFY_DARPAN_REF=v0.7.0
+ARG NETSUITE_DARPAN_REF=v0.3.0
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
 # only in this component. Without it prod would offer a database source that fails at extraction.
-ARG DATABASE_DARPAN_REF=v0.2.0
+# v0.2.1 (darpan v2.0.0): list/delete source services as XML actions with an explicit tenant
+# condition beside DAR-BE-076's entity filter; same service names and parameters.
+ARG DATABASE_DARPAN_REF=v0.2.1
 # moqui-gql has no release tag yet (Phase-0/1 component); pin to a tag before exposing the public tier.
 ARG MOQUI_GQL_REF=main
 
