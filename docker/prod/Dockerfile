@@ -69,7 +69,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v2.0.0
+ARG DARPAN_REF=v2.1.0
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -95,18 +95,23 @@ ARG DARPAN_REF=v2.0.0
 # (extract#NetSuiteOrders, netsuite-darpan v0.3.0). The connectors also read darpan 2.0's
 # filter verdict (DAR-BE-054 removed firstMatchingRule), so the pairing holds in both directions:
 # neither the old connectors against v2.0.0 nor the new connectors against v1.5.1 is a valid image.
-ARG DARPAN_HOTWAX_REF=v0.9.0
-ARG SHOPIFY_DARPAN_REF=v0.7.0
-ARG NETSUITE_DARPAN_REF=v0.3.0
+# darpan v2.1.0 moves ALL THREE again: each connector tag calls ExcludedRecordsSidecar.discard, which
+# darpan v2.0.0 lacks, and darpan 2.1 seeds OMS_ORDER_ITEMS_GQL (extract#HotWaxOmsGqlOrderItems,
+# darpan-hotwax v0.10.0) and the NETSUITE diagnostics probe (netsuite-darpan v0.4.0).
+ARG DARPAN_HOTWAX_REF=v0.10.0
+ARG SHOPIFY_DARPAN_REF=v0.8.0
+ARG NETSUITE_DARPAN_REF=v0.4.0
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
 # only in this component. Without it prod would offer a database source that fails at extraction.
 # v0.2.1 (darpan v2.0.0): list/delete source services as XML actions with an explicit tenant
-# condition beside DAR-BE-076's entity filter; same service names and parameters.
+# condition beside DAR-BE-076's entity filter; same service names and parameters. No commits for
+# darpan v2.1.0; it compiles against it unchanged.
 ARG DATABASE_DARPAN_REF=v0.2.1
-# moqui-gql has no release tag yet (Phase-0/1 component); pin to a tag before exposing the public tier.
-ARG MOQUI_GQL_REF=main
+# moqui-gql v0.1.0 (first tag, with darpan v2.1.0): darpan 2.1's audit report, finding and findings roots
+# need it, and the report it serves has no extendedThru. Moves with DARPAN_REF.
+ARG MOQUI_GQL_REF=v0.1.0
 
 WORKDIR /
 

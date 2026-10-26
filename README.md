@@ -41,23 +41,23 @@ components to release tags. Values below are the `ARG` defaults in each file.
 | moqui-framework | `drpn-ai/moqui-framework` (fork) | `master` | `master` (moves; pass `MOQUI_FRAMEWORK_REF=<sha>` for a reproducible build) |
 | moqui-runtime | `moqui/moqui-runtime` | `v3.9.9` | `v3.9.9` |
 | moqui-sftp | `moqui/moqui-sftp` | `v1.0.3` | `v1.0.3` |
-| darpan | `drpn-ai/darpan` | `main` | `v2.0.0` |
-| darpan-hotwax | `drpn-ai/darpan-hotwax` | `main` | `v0.9.0` |
-| shopify-darpan | `drpn-ai/shopify-darpan` | `main` | `v0.7.0` |
-| netsuite-darpan | `drpn-ai/netsuite-darpan` | `main` | `v0.3.0` |
+| darpan | `drpn-ai/darpan` | `main` | `v2.1.0` |
+| darpan-hotwax | `drpn-ai/darpan-hotwax` | `main` | `v0.10.0` |
+| shopify-darpan | `drpn-ai/shopify-darpan` | `main` | `v0.8.0` |
+| netsuite-darpan | `drpn-ai/netsuite-darpan` | `main` | `v0.4.0` |
 | database-darpan | `drpn-ai/database-darpan` | `main` | `v0.2.1` |
-| moqui-gql | `drpn-ai/moqui-gql` | `main` | `main` (no release tag yet; pin one before exposing the public tier) |
+| moqui-gql | `drpn-ai/moqui-gql` | `main` | `v0.1.0` |
 
 Pins move together. A darpan tag's seed data can name services or record fields that exist only in
 a matching component tag, so when `DARPAN_REF` moves, check `DARPAN_HOTWAX_REF`,
 `SHOPIFY_DARPAN_REF`, and the others in the same change. The comments above the `ARG` block in
 `docker/prod/Dockerfile` record why each pairing exists.
 
-darpan `v2.0.0` pairs with darpan-hotwax `v0.9.0`, shopify-darpan `v0.7.0` and netsuite-darpan
-`v0.3.0` in both directions: its upgrade data seeds connector rows whose extract services exist
-only in those tags, and those builds call darpan 2.0's filter verdict (`firstMatchingRule` was
-removed). database-darpan `v0.2.1` is a patch that ships with the set. Deploy the image with
-darpan-ui `v3.0.0`, and roll back as a set (darpan-ui `v2.6.1` with darpan `v1.5.1`).
+darpan `v2.1.0` pairs with darpan-hotwax `v0.10.0`, shopify-darpan `v0.8.0`, netsuite-darpan
+`v0.4.0` and moqui-gql `v0.1.0` in both directions: the connector tags call
+`ExcludedRecordsSidecar.discard`, which darpan `v2.0.0` lacks, and darpan 2.1 seeds connector rows
+and serves GraphQL roots that only those tags carry. database-darpan stays `v0.2.1`. Deploy the
+image with darpan-ui `v3.1.0`, and roll back as a set (darpan-ui `v3.0.0` with darpan `v2.0.0`).
 
 ## Edit both Dockerfiles
 
