@@ -66,33 +66,10 @@ ARG MOQUI_FRAMEWORK_REF=master
 ARG MOQUI_RUNTIME_REF=v3.9.9
 # moqui-atomikos retired: Moqui 4 embeds Bitronix as the default JTA TM; no separate Atomikos component needed.
 ARG MOQUI_SFTP_REF=v1.0.3
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
-# TESTING VARIANT — tag v0.0.2 (supersedes 0.0.1). The four drpn-ai product components track `main`
-# instead of release tags, so a prod-shaped image can be built from unreleased code. Everything else
-# is the production build unchanged: the same hardened base image, prod entrypoint, JSON logging,
-# and the prod CORS allowlist (which, unlike docker/Dockerfile, does NOT carry the `*` wildcard).
-#
-# This variant is NOT a release recipe and deliberately does not live on main:
-#   - The image is not reproducible. `main` moves, so the same tag builds different images on
-#     different days. The tag pins the recipe, not the result — record the component commit SHAs
-#     from the build log if you need to know what you actually deployed.
-#   - Nothing here has been through a release cut. Whatever is on main at build time ships, including
-#     work that has not been release-tested.
-# Build a real release from main, where these refs stay pinned to tags.
-#
-# The moqui refs above are NOT moved by this variant, and they are not all the same kind of thing:
-#   - MOQUI_FRAMEWORK_REF=master is the drpn-ai FORK's master (cloned from drpn-ai/moqui-framework
-#     below), so it already IS this project's code — it carries the login/UserLoginKey deadlock fix.
-#     Corrected 2026-08-20: an earlier version of this note called it upstream, which it stopped
-#     being when f73f181 repointed the pins at the fork.
-#   - MOQUI_RUNTIME_REF / MOQUI_SFTP_REF are genuinely upstream moqui/* and stay pinned to tags;
-#     MOQUI_RUNTIME_REF in particular is held at v3.9.9 pending the Groovy 5 / Gradle bump.
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
-#
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
-# pre-reset refs. Released prod pins this to a tag (v1.4.0 as of this branch point).
-ARG DARPAN_REF=main
+# pre-reset refs.
+ARG DARPAN_REF=v2.1.0
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -103,16 +80,38 @@ ARG DARPAN_REF=main
 # remoteSendServiceName both name extract#HotWaxOmsTransferOrders — a service that exists only in
 # darpan-hotwax v0.7.0. A v1.4.0/v0.6.0 pairing seeds a connector row pointing at a service the
 # image does not contain, so DARPAN_HOTWAX_REF moves with DARPAN_REF.
-# shopify-darpan stays at v0.5.0 and netsuite-darpan at v0.2.0 — neither has commits in this range.
-# On this testing variant all four move together to main, which keeps that pairing rule satisfied by
-# construction: every component is at its own latest, so a seeded connector row cannot reference a
-# service that a differently-pinned sibling does not contain. Released prod pins these to tags
-# (v0.7.0 / v0.5.0 / v0.2.0 as of this branch point).
-ARG DARPAN_HOTWAX_REF=main
-ARG SHOPIFY_DARPAN_REF=main
-ARG NETSUITE_DARPAN_REF=main
-# moqui-gql has no release tag yet (Phase-0/1 component); pin to a tag before exposing the public tier.
-ARG MOQUI_GQL_REF=main
+# netsuite-darpan stays at v0.2.0 — no commits in this range. darpan-hotwax stays at v0.8.0 for
+# the same reason across 1.5.0..1.5.1.
+# darpan v1.5.1 seeds the SHOPIFY_RETURN_REFS rules-board pill $.records[*].returnWorkflowStatus,
+# a field emitted only by shopify-darpan v0.6.1. Pinning v1.5.1 against v0.6.0 gives a pill whose
+# field is absent from the extract, so every exclusion rule on it matches nothing and reports
+# excludedCount 0 — indistinguishable from a feature that was never deployed. SHOPIFY_DARPAN_REF
+# moves with DARPAN_REF.
+# darpan v2.0.0 moves ALL THREE connector pins. Its upgrade data seeds six connector rows whose
+# extractServiceName exists only in the new connector tags: OMS_GQL, OMS_RETURNS_GQL,
+# OMS_ORDER_ITEMS and OMS_ORDER_LINE_UNITS (extract#HotWaxOmsGql{Orders,Returns},
+# extract#HotWaxOmsOrder{Items,LineUnits}, darpan-hotwax v0.9.0), SHOPIFY_ORDER_LINE_UNITS
+# (extract#ShopifyOrderLineUnits, shopify-darpan v0.7.0) and NETSUITE_SUITEQL
+# (extract#NetSuiteOrders, netsuite-darpan v0.3.0). The connectors also read darpan 2.0's
+# filter verdict (DAR-BE-054 removed firstMatchingRule), so the pairing holds in both directions:
+# neither the old connectors against v2.0.0 nor the new connectors against v1.5.1 is a valid image.
+# darpan v2.1.0 moves ALL THREE again: each connector tag calls ExcludedRecordsSidecar.discard, which
+# darpan v2.0.0 lacks, and darpan 2.1 seeds OMS_ORDER_ITEMS_GQL (extract#HotWaxOmsGqlOrderItems,
+# darpan-hotwax v0.10.0) and the NETSUITE diagnostics probe (netsuite-darpan v0.4.0).
+ARG DARPAN_HOTWAX_REF=v0.10.0
+ARG SHOPIFY_DARPAN_REF=v0.8.0
+ARG NETSUITE_DARPAN_REF=v0.4.0
+# Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
+# v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
+# names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
+# only in this component. Without it prod would offer a database source that fails at extraction.
+# v0.2.1 (darpan v2.0.0): list/delete source services as XML actions with an explicit tenant
+# condition beside DAR-BE-076's entity filter; same service names and parameters. No commits for
+# darpan v2.1.0; it compiles against it unchanged.
+ARG DATABASE_DARPAN_REF=v0.2.1
+# moqui-gql v0.1.0 (first tag, with darpan v2.1.0): darpan 2.1's audit report, finding and findings roots
+# need it, and the report it serves has no extendedThru. Moves with DARPAN_REF.
+ARG MOQUI_GQL_REF=v0.1.0
 
 WORKDIR /
 
@@ -134,6 +133,7 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
     git clone --depth 1 -b "$DARPAN_HOTWAX_REF"   https://github.com/drpn-ai/darpan-hotwax.git  /moqui-framework/runtime/component/darpan-hotwax; \
     git clone --depth 1 -b "$SHOPIFY_DARPAN_REF"  https://github.com/drpn-ai/shopify-darpan.git /moqui-framework/runtime/component/shopify-darpan; \
     git clone --depth 1 -b "$NETSUITE_DARPAN_REF" https://github.com/drpn-ai/netsuite-darpan.git /moqui-framework/runtime/component/netsuite-darpan; \
+    git clone --depth 1 -b "$DATABASE_DARPAN_REF" https://github.com/drpn-ai/database-darpan.git /moqui-framework/runtime/component/database-darpan; \
     git clone --depth 1 -b "$MOQUI_GQL_REF"       https://github.com/drpn-ai/moqui-gql.git      /moqui-framework/runtime/component/moqui-gql; \
     rm -f /root/.netrc
 

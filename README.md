@@ -28,8 +28,60 @@ work against this repo without per-job path overrides.
   COPY'd from this repo's build context. They are NOT taken from the cloned darpan component — its
   embedded `docker/` directory was removed 2026-07-04 (`drpn-ai/darpan` 1af89e7).
 - CI/prod builds MUST digest-pin the base image: `--build-arg BASE_IMAGE=maarg-base-os@sha256:<d>` and `--build-arg REQUIRE_PINNED_BASE=1`.
-- GitHub credentials go in via BuildKit secrets (`--secret id=netrc,...`), never build args.
+- GitHub credentials go in via BuildKit secrets (`--secret id=netrc,...`), never build args. The `GIT_USERNAME`/`GIT_PASSWORD` build args still exist as a fallback; do not use them.
 - `.env.local` holds real secrets (JWT key, DB credentials) and is git-ignored — copy `.env.local.example` and fill it in locally.
+
+## Component pins
+
+The two Dockerfiles clone the same component set. UAT tracks branch heads; prod pins product
+components to release tags. Values below are the `ARG` defaults in each file.
+
+| Component | Repo | `docker/Dockerfile` (UAT/CI) | `docker/prod/Dockerfile` |
+|---|---|---|---|
+| moqui-framework | `drpn-ai/moqui-framework` (fork) | `master` | `master` (moves; pass `MOQUI_FRAMEWORK_REF=<sha>` for a reproducible build) |
+| moqui-runtime | `moqui/moqui-runtime` | `v3.9.9` | `v3.9.9` |
+| moqui-sftp | `moqui/moqui-sftp` | `v1.0.3` | `v1.0.3` |
+| darpan | `drpn-ai/darpan` | `main` | `v2.1.0` |
+| darpan-hotwax | `drpn-ai/darpan-hotwax` | `main` | `v0.10.0` |
+| shopify-darpan | `drpn-ai/shopify-darpan` | `main` | `v0.8.0` |
+| netsuite-darpan | `drpn-ai/netsuite-darpan` | `main` | `v0.4.0` |
+| database-darpan | `drpn-ai/database-darpan` | `main` | `v0.2.1` |
+| moqui-gql | `drpn-ai/moqui-gql` | `main` | `v0.1.0` |
+
+Pins move together. A darpan tag's seed data can name services or record fields that exist only in
+a matching component tag, so when `DARPAN_REF` moves, check `DARPAN_HOTWAX_REF`,
+`SHOPIFY_DARPAN_REF`, and the others in the same change. The comments above the `ARG` block in
+`docker/prod/Dockerfile` record why each pairing exists.
+
+darpan `v2.1.0` pairs with darpan-hotwax `v0.10.0`, shopify-darpan `v0.8.0`, netsuite-darpan
+`v0.4.0` and moqui-gql `v0.1.0` in both directions: the connector tags call
+`ExcludedRecordsSidecar.discard`, which darpan `v2.0.0` lacks, and darpan 2.1 seeds connector rows
+and serves GraphQL roots that only those tags carry. database-darpan stays `v0.2.1`. Deploy the
+image with darpan-ui `v3.1.0`, and roll back as a set (darpan-ui `v3.0.0` with darpan `v2.0.0`).
+
+## Edit both Dockerfiles
+
+`docker/Dockerfile` and `docker/prod/Dockerfile` are separate files with no shared include. A change
+to the component list, the framework ref, config `COPY` lines, JVM flags, the SameSite guard, or the
+build patch must be made in both, or the UAT image stops testing what prod runs. The same applies to
+`docker/entrypoint.sh` and `docker/prod/entrypoint.sh`. Compare them with
+`diff docker/Dockerfile docker/prod/Dockerfile` before committing.
+
+## UAT CORS and cookie posture (temporary)
+
+- `docker/Dockerfile` prepends `*` to `Moqui_WEBAPP_ALLOW_ORIGINS`. `docker/prod/Dockerfile` ships an
+  exact origin list. Both entrypoints write `Moqui_WEBAPP_ALLOW_ORIGINS` (or
+  `WEBAPP_ALLOW_ORIGINS`) into `webapp_allow_origins` in `MoquiProductionConf.xml` at boot.
+- The `*` dates from 2026-07-02: the UAT ingress rewrites `Access-Control-Allow-Origin` to `*`, so
+  darpan-ui on UAT uses header auth (`VITE_DARPAN_COOKIE_AUTH=false`) instead of the HttpOnly cookie.
+- Both Dockerfiles replace the framework `web.xml` `__SAME_SITE_LAX__` marker with
+  `__SAME_SITE_NONE__`, so framework cookies are `SameSite=None` in both images. The darpan login
+  cookie sets its own SameSite per request.
+- Reverting is tracked as DAR-OPS-001. Order matters: remove `*` here (and redeploy) before or with
+  the ingress fix, and only then switch UAT darpan-ui to cookie auth. The full sequence is in
+  darpan-ui `docs/auth-and-cors-by-environment.md`.
+- Neither Dockerfile sets a `USER`, so both images run as root (temporary since 2026-07-02;
+  DAR-OPS-002).
 
 ## Provenance
 
