@@ -66,10 +66,37 @@ ARG MOQUI_FRAMEWORK_REF=master
 ARG MOQUI_RUNTIME_REF=v3.9.9
 # moqui-atomikos retired: Moqui 4 embeds Bitronix as the default JTA TM; no separate Atomikos component needed.
 ARG MOQUI_SFTP_REF=v1.0.3
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# TESTING VARIANT — tag v0.0.3 (supersedes v0.0.2). All six drpn-ai product components (darpan,
+# darpan-hotwax, shopify-darpan, netsuite-darpan, database-darpan, moqui-gql) track `main` instead
+# of release tags, so a prod-shaped image can be built from unreleased code. Everything else is the
+# production build unchanged: the same hardened base image, prod entrypoint, JSON logging, and the
+# prod CORS allowlist (which, unlike docker/Dockerfile, does NOT carry the `*` wildcard).
+#
+# This variant is NOT a release recipe and deliberately does not live on main:
+#   - The image is not reproducible. `main` moves, so the same tag builds different images on
+#     different days. The tag pins the recipe, not the result — record the component commit SHAs
+#     from the build log if you need to know what you actually deployed.
+#   - Nothing here has been through a release cut. Whatever is on main at build time ships, including
+#     work that has not been release-tested.
+# Build a real release from main, where these refs stay pinned to tags.
+#
+# The moqui refs above are NOT moved by this variant, and they are not all the same kind of thing:
+#   - MOQUI_FRAMEWORK_REF=master is the drpn-ai FORK's master (cloned from drpn-ai/moqui-framework
+#     below), so it already tracks this project's latest framework code.
+#   - MOQUI_RUNTIME_REF / MOQUI_SFTP_REF are genuinely upstream moqui/* and stay pinned to tags;
+#     MOQUI_RUNTIME_REF in particular is held at v3.9.9 to match the dev baseline.
+# The pin-pairing notes below explain why released pins move together; tracking main for every
+# component satisfies them by construction, since no component can name a service a
+# differently-pinned sibling lacks.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+#
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
-# pre-reset refs.
-ARG DARPAN_REF=v2.1.0
+# pre-reset refs. Released prod pins these refs to tags: darpan v2.1.0, darpan-hotwax v0.10.0,
+# shopify-darpan v0.8.0, netsuite-darpan v0.4.0, database-darpan v0.2.1, moqui-gql v0.1.0 as of this
+# branch point.
+ARG DARPAN_REF=main
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -98,9 +125,9 @@ ARG DARPAN_REF=v2.1.0
 # darpan v2.1.0 moves ALL THREE again: each connector tag calls ExcludedRecordsSidecar.discard, which
 # darpan v2.0.0 lacks, and darpan 2.1 seeds OMS_ORDER_ITEMS_GQL (extract#HotWaxOmsGqlOrderItems,
 # darpan-hotwax v0.10.0) and the NETSUITE diagnostics probe (netsuite-darpan v0.4.0).
-ARG DARPAN_HOTWAX_REF=v0.10.0
-ARG SHOPIFY_DARPAN_REF=v0.8.0
-ARG NETSUITE_DARPAN_REF=v0.4.0
+ARG DARPAN_HOTWAX_REF=main
+ARG SHOPIFY_DARPAN_REF=main
+ARG NETSUITE_DARPAN_REF=main
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
@@ -108,10 +135,10 @@ ARG NETSUITE_DARPAN_REF=v0.4.0
 # v0.2.1 (darpan v2.0.0): list/delete source services as XML actions with an explicit tenant
 # condition beside DAR-BE-076's entity filter; same service names and parameters. No commits for
 # darpan v2.1.0; it compiles against it unchanged.
-ARG DATABASE_DARPAN_REF=v0.2.1
+ARG DATABASE_DARPAN_REF=main
 # moqui-gql v0.1.0 (first tag, with darpan v2.1.0): darpan 2.1's audit report, finding and findings roots
 # need it, and the report it serves has no extendedThru. Moves with DARPAN_REF.
-ARG MOQUI_GQL_REF=v0.1.0
+ARG MOQUI_GQL_REF=main
 
 WORKDIR /
 
