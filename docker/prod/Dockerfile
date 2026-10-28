@@ -69,7 +69,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v2.1.3
+ARG DARPAN_REF=v2.1.4
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -107,8 +107,10 @@ ARG DARPAN_REF=v2.1.3
 # emit (DAR-BE-153); its gorjana R21 reads netsuite-darpan v0.4.2's ITEM_AMOUNT column macro (DAR-BE-149).
 # darpan v2.1.3 moves darpan-hotwax v0.10.3 with it: darpan 2.1.3 seeds the OMS_GQL salesChannelEnumId pill, which
 # only darpan-hotwax v0.10.3's GraphQL order read can select (DAR-BE-153, Steve Madden's POS exclusion).
+# darpan v2.1.4 moves shopify-darpan v0.8.3 with it: a voided AUTHORIZATION no longer counts in paymentTransactionIds,
+# which darpan's "all in" / "contains all" rules read (DAR-BE-153, 19 cancelled orders on Steve Madden's first run).
 ARG DARPAN_HOTWAX_REF=v0.10.3
-ARG SHOPIFY_DARPAN_REF=v0.8.2
+ARG SHOPIFY_DARPAN_REF=v0.8.3
 ARG NETSUITE_DARPAN_REF=v0.4.2
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
