@@ -41,10 +41,10 @@ components to release tags. Values below are the `ARG` defaults in each file.
 | moqui-framework | `drpn-ai/moqui-framework` (fork) | `master` | `master` (moves; pass `MOQUI_FRAMEWORK_REF=<sha>` for a reproducible build) |
 | moqui-runtime | `moqui/moqui-runtime` | `v3.9.9` | `v3.9.9` |
 | moqui-sftp | `moqui/moqui-sftp` | `v1.0.3` | `v1.0.3` |
-| darpan | `drpn-ai/darpan` | `main` | `v2.1.1` |
-| darpan-hotwax | `drpn-ai/darpan-hotwax` | `main` | `v0.10.1` |
-| shopify-darpan | `drpn-ai/shopify-darpan` | `main` | `v0.8.1` |
-| netsuite-darpan | `drpn-ai/netsuite-darpan` | `main` | `v0.4.1` |
+| darpan | `drpn-ai/darpan` | `main` | `v2.1.2` |
+| darpan-hotwax | `drpn-ai/darpan-hotwax` | `main` | `v0.10.2` |
+| shopify-darpan | `drpn-ai/shopify-darpan` | `main` | `v0.8.2` |
+| netsuite-darpan | `drpn-ai/netsuite-darpan` | `main` | `v0.4.2` |
 | database-darpan | `drpn-ai/database-darpan` | `main` | `v0.2.2` |
 | moqui-gql | `drpn-ai/moqui-gql` | `main` | `v0.1.1` |
 
@@ -53,11 +53,11 @@ a matching component tag, so when `DARPAN_REF` moves, check `DARPAN_HOTWAX_REF`,
 `SHOPIFY_DARPAN_REF`, and the others in the same change. The comments above the `ARG` block in
 `docker/prod/Dockerfile` record why each pairing exists.
 
-darpan `v2.1.1` pairs with darpan-hotwax `v0.10.1`, shopify-darpan `v0.8.1`, netsuite-darpan
-`v0.4.1`, database-darpan `v0.2.2` and moqui-gql `v0.1.1`: every connector's config create path
-mints ids and checks tenant ownership against darpan 2.1.1 (DAR-BE-135), and shopify-darpan serves
-the `completedReturns` option darpan's seed declares. Deploy the image with darpan-ui `v3.1.1`, and
-roll back as a set (darpan `v2.1.0` set with darpan-ui `v3.1.0`).
+darpan `v2.1.2` pairs with darpan-hotwax `v0.10.2`, shopify-darpan `v0.8.2` and netsuite-darpan
+`v0.4.2`: darpan 2.1.2 seeds the payment transaction id fields only those connector tags emit
+(DAR-BE-153), and gorjana R21 reads netsuite-darpan's ITEM_AMOUNT macro (DAR-BE-149). database-darpan
+stays `v0.2.2` and moqui-gql `v0.1.1` (no commits). Deploy the image with darpan-ui `v3.1.2`, and roll
+back as a set (darpan `v2.1.1` set with darpan-ui `v3.1.1`).
 
 ## Edit both Dockerfiles
 
