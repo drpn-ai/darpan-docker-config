@@ -69,7 +69,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v2.1.6
+ARG DARPAN_REF=v2.1.7
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -114,6 +114,7 @@ ARG DARPAN_REF=v2.1.6
 # extract#HotWaxOmsGqlProducts and gorjana R22 reads netsuite-darpan v0.4.3's ACTIVE_ITEMS template (DAR-BE-157).
 # darpan v2.1.6 moves shopify-darpan v0.8.5 with it: the Shopify bulk read streams to disk instead of holding a month in
 # heap (DAR-BE-162, Steve Madden run 100766 OOMed a 2 GB JVM); darpan 2.1.6 adds retry from the failed step (DAR-BE-163).
+# darpan v2.1.7 moves alone: a key on more than one record is a finding, never a failed compare (DAR-BE-165).
 ARG DARPAN_HOTWAX_REF=v0.10.4
 ARG SHOPIFY_DARPAN_REF=v0.8.5
 ARG NETSUITE_DARPAN_REF=v0.4.3
