@@ -69,7 +69,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v2.1.9
+ARG DARPAN_REF=v2.1.10
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -117,6 +117,7 @@ ARG DARPAN_REF=v2.1.9
 # darpan v2.1.7 moves alone: a key on more than one record is a finding, never a failed compare (DAR-BE-165).
 # darpan v2.1.8 moves alone: the compare reads each JSON extract's records one per line, so a month fits the heap (DAR-BE-166).
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
+# darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 ARG DARPAN_HOTWAX_REF=v0.10.4
 ARG SHOPIFY_DARPAN_REF=v0.8.5
 ARG NETSUITE_DARPAN_REF=v0.4.3
