@@ -66,6 +66,8 @@ and deregisters the clone. A wall the control cannot cross either reads INCONCLU
   `d:log` line; `forName('java.lang.Runtime')` NOT_ALLOWED; `while (true) {}` stopped at 2,000,001 units (956 ms).
 - Worker down (service at 0): the same call returns `WORKER: ... did not answer (ConnectException); the script was not
   run`, 0 units, so Moqui never runs a script itself. Back at 1: the new task warms, Cloud Map re-points, first call ok.
+- Caller token ON (secret darpan-uat/script-worker-token, created by Aditi): guardrail check 18/18 incl. "no token ->
+  401" from Moqui's own SG; Moqui with the token still gets 1 + 1 = 2, sum 12, escape NOT_ALLOWED, loop UNITS.
 
 ## Learned
 
@@ -79,7 +81,6 @@ and deregisters the clone. A wall the control cannot cross either reads INCONCLU
 
 ## Gaps before prod
 
-- Caller token built and image-tested (no/wrong token 401, right token runs) but NOT on UAT until the secret exists.
 - One worker JVM serves every tenant: an escape could see another tenant's in-flight input; per-tenant workers or a
   process per evaluation close it.
 - No live S3 exfiltration test (see Learned); no deliberate wall-removal (mutation) run on AWS yet.
