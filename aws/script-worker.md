@@ -23,6 +23,27 @@ Root = UAT's image with only `darpan/script/ScriptSupervisor*` + `ScriptWorker*`
 Both live in the stack's one ECR repo, so the worker exists before the service that pulls it (a new repo would be
 empty at create time and trip the circuit breaker).
 
+## Caller token (darpan 1950754)
+
+Moqui sends `DARPAN_SCRIPT_WORKER_TOKEN` (from Secrets Manager) as `X-Darpan-Worker-Token`; the worker holds only
+`DARPAN_SCRIPT_WORKER_TOKEN_SHA256` (plain env, a hash) and compares digests in constant time, answering 401 otherwise.
+So the worker needs no secret, no Secrets Manager endpoint and no extra DNS name, and an escaped script that reads the
+worker's environment learns nothing it can call the worker with. Where NetworkPolicy is not enforced (a cluster
+without a policy-enforcing CNI) this is the only wall. The secret lives outside the stack because CloudFormation
+cannot hash a value it generates. Turning it on (secret created by a person, not by an agent):
+
+```sh
+T=$(openssl rand -base64 36 | tr -d '/+=\n')
+printf %s "$T" | aws secretsmanager create-secret --profile darpan --region us-east-2 \
+  --name darpan-uat/script-worker-token --secret-string file:///dev/stdin --query ARN --output text
+printf %s "$T" | shasum -a 256 | cut -d' ' -f1; unset T
+# then a change set: ImageTag=uat-worker2 WorkerImageTag=script-worker-poc3
+#   WorkerTokenSecretArn=<ARN above> WorkerTokenSha256=<hash above>   (Moqui restarts once)
+```
+
+With the token on, `worker-guardrail-check.sh` checks that a call without it gets 401 (the probe never holds the
+token: it would land in ECS task overrides); `1 + 1` and the escape then run through Moqui's `run#TenantScript`.
+
 ## Re-check the walls
 
 ```sh
@@ -54,7 +75,7 @@ and deregisters the clone. A wall the control cannot cross either reads INCONCLU
 
 ## Gaps before prod
 
-- Root↔worker auth is the security group only: add a shared token (Secrets Manager, constant-time check) or mTLS.
+- Caller token built and image-tested (no/wrong token 401, right token runs) but NOT on UAT until the secret exists.
 - One worker JVM serves every tenant: an escape could see another tenant's in-flight input; per-tenant workers or a
   process per evaluation close it.
 - Moqui's real path (`run#TenantScript` with a login) and "worker down → WORKER, never local" not yet exercised on AWS.

@@ -9,7 +9,9 @@ no_caps() { grep -q '^CapEff:[[:space:]]*0000000000000000$' /proc/self/status; }
 no_new_privs() { grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status; }
 SECRET_NAMES='pass|secret|token|jwt|crypt|_key$|^Moqui_DB|^DB_|^elasticsearch'
 ro_root() { awk '$2=="/" {print $4}' /proc/mounts | tail -1 | grep -q -E '^ro(,|$)'; }
-no_secret_env() { ! env | cut -d= -f1 | grep -E -i "$SECRET_NAMES"; }
+# DARPAN_SCRIPT_WORKER_TOKEN_SHA256 is a hash, not a secret: knowing it does not let anyone call the worker.
+secret_names() { env | cut -d= -f1 | grep -v '^DARPAN_SCRIPT_WORKER_TOKEN_SHA256$' | grep -E -i "$SECRET_NAMES"; }
+no_secret_env() { ! secret_names; }
 no_aws_creds() { [ -z "${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}" ] && [ -z "${AWS_ACCESS_KEY_ID:-}" ] \
   && ! curl -sf -m 3 "http://169.254.170.2/v2/credentials/" >/dev/null; }
 mem_cap() { local m; m=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes); \
@@ -33,8 +35,9 @@ r no_secret_env no_secret_env
 r no_aws_creds no_aws_creds
 r mem_cap      mem_cap
 mem_cap | grep '^M ' || true
-echo "E $(env | cut -d= -f1 | grep -E -i "$SECRET_NAMES" | tr '\n' ' ')"
+echo "E $(secret_names | tr '\n' ' ')"
 echo "W $(find / -xdev \( -path /proc -o -path /sys \) -prune -o -writable -print 2>/dev/null | head -5 | tr '\n' ' ')"
+echo "F noauth $(curl -s -m 10 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary "$ONE_JSON" "$WORKER_URL/evaluate")"
 echo "F one $(curl -s -m 10 -H 'Content-Type: application/json' --data-binary "$ONE_JSON" "$WORKER_URL/evaluate" | head -c 300)"
 echo "F esc $(curl -s -m 10 -H 'Content-Type: application/json' --data-binary "$ESC_JSON" "$WORKER_URL/evaluate" | head -c 300)"
 echo "END"

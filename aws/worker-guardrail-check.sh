@@ -49,6 +49,8 @@ c['command'] = [sys.argv[3]]
 c.pop('healthCheck', None)   # the probe is not the server; nothing else about the container changes
 json.dump(out, open(sys.argv[2], 'w'))
 EOF
+TOKEN_MODE=$(python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1]))["taskDefinition"]["containerDefinitions"][0]
+print("required" if any(e["name"]=="DARPAN_SCRIPT_WORKER_TOKEN_SHA256" for e in c.get("environment",[])) else "off")' "$WORK/td.json")
 PROBE_TD=$($A ecs register-task-definition --cli-input-json "file://$WORK/probe-td.json" --query taskDefinition.taskDefinitionArn)
 
 ONE_JSON='{"profile":"EXPRESSION","body":"1 + 1","input":null}'
@@ -127,10 +129,20 @@ echo "info          no-new-privileges flag                         $( [ "$(got W
 
 echo "== function: Moqui's group reaches the worker by name and it refuses escapes"
 one=$(awk '$1=="F" && $2=="one"' "$WORK/C.log"); esc=$(awk '$1=="F" && $2=="esc"' "$WORK/C.log")
+noauth=$(awk '$1=="F" && $2=="noauth"{print $3}' "$WORK/C.log")
+if [ "$TOKEN_MODE" = required ]; then
+  # The probe never holds the token (it would land in ECS task overrides), so it can only prove the door is locked;
+  # 1 + 1 and the escape run with the token through Moqui's own path (run#TenantScript).
+  if [ "$noauth" = 401 ]; then report PASS "caller token required (no token -> 401)" "Moqui's group without the token is refused"
+  else report FAIL "caller token required (no token -> 401)" "got HTTP ${noauth:-nothing}"; fi
+  echo "info          1 + 1 / escape with the token                   run through Moqui (run#TenantScript), not from the probe"
+else
+echo "info          caller token                                   NOT required (WorkerTokenSecretArn empty): the security group is the only wall"
 if echo "$one" | grep -q '"ok":true' && echo "$one" | grep -q '"result":2'; then report PASS "Moqui group -> $WORKER_URL (1 + 1)" "result 2"
 else report FAIL "Moqui group -> $WORKER_URL (1 + 1)" "got: ${one:0:120}"; fi
 if echo "$esc" | grep -q '"kind":"NOT_ALLOWED"'; then report PASS "escape attempt (forName Runtime) refused" NOT_ALLOWED
 else report FAIL "escape attempt (forName Runtime) refused" "got: ${esc:0:120}"; fi
+fi
 
 echo; echo "PASS $pass   FAIL $fail   INCONCLUSIVE $unsure"
 [ "$fail" -eq 0 ] && [ "$unsure" -eq 0 ]

@@ -87,12 +87,23 @@ Parameters:
       DARPAN_SCRIPT_WORKER_URL at it. Off = scripts run in Moqui as before, and every worker resource is removed.
   WorkerImageTag:
     Type: String
-    Default: script-worker-poc2
+    Default: script-worker-poc3
     Description: Tag of the script-worker image in this stack's ECR repository (k8s-lab/worker.Dockerfile).
   S3PrefixListId:
     Type: String
     Default: pl-7ba54012
     Description: AWS-managed prefix list com.amazonaws.<region>.s3 (pl-7ba54012 in us-east-2); the worker's only non-endpoint egress.
+  WorkerTokenSecretArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Secrets Manager secret holding the Moqui -> worker caller token, created outside this stack (CloudFormation
+      cannot hash a value it generates). Empty = no caller check (the worker warns). See aws/script-worker.md.
+  WorkerTokenSha256:
+    Type: String
+    Default: ''
+    AllowedPattern: '^([0-9a-f]{64})?$'
+    Description: SHA-256 (lowercase hex) of that token; the only form of it the worker ever holds.
   AlertEmail:
     Type: String
     Description: Where the monthly budget alert goes.
@@ -105,6 +116,14 @@ Conditions:
   HasHostName: !Not [!Equals [!Ref HostName, '']]
   HasSearch: !Equals [!Ref SearchEnabled, 'true']
   HasWorker: !Equals [!Ref WorkerEnabled, 'true']
+  HasWorkerToken: !And [!Condition HasWorker, !Not [!Equals [!Ref WorkerTokenSecretArn, '']]]
+
+Rules:
+  WorkerTokenNeedsItsHash:
+    RuleCondition: !Not [!Equals [!Ref WorkerTokenSecretArn, '']]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref WorkerTokenSha256, '']]
+        AssertDescription: WorkerTokenSha256 is required with WorkerTokenSecretArn (otherwise the worker would accept any caller)
 
 Resources:
   # ---------- Network ----------
@@ -468,6 +487,7 @@ Resources:
                   - !Ref JwtKeySecret
                   - !GetAtt Database.MasterUserSecret.SecretArn
                   - !If [HasSearch, !Ref SearchMasterSecret, !Ref AWS::NoValue]
+                  - !If [HasWorkerToken, !Ref WorkerTokenSecretArn, !Ref AWS::NoValue]
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -641,6 +661,10 @@ Resources:
             - !If
               - HasSearch
               - { Name: elasticsearch_password, ValueFrom: !Sub '${SearchMasterSecret}:password::' }
+              - !Ref AWS::NoValue
+            - !If
+              - HasWorkerToken
+              - { Name: DARPAN_SCRIPT_WORKER_TOKEN, ValueFrom: !Ref WorkerTokenSecretArn }
               - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
@@ -997,6 +1021,12 @@ Resources:
           Memory: 384
           User: '10001:10001'
           ReadonlyRootFilesystem: true
+          # A hash, not a secret: an escaped script that reads it still cannot call the worker.
+          Environment:
+            - !If
+              - HasWorkerToken
+              - { Name: DARPAN_SCRIPT_WORKER_TOKEN_SHA256, Value: !Ref WorkerTokenSha256 }
+              - !Ref AWS::NoValue
           LinuxParameters:
             Capabilities: { Drop: [ALL] }
           PortMappings:
