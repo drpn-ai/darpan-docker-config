@@ -33,6 +33,19 @@
          visit/visitor tracking stays off: stateless API, no server-side visit semantics. -->
     <server-stats stats-skip-condition="pathInfo?.startsWith('/status')" visit-enabled="false" visitor-enabled="false"/>
 
+    <!-- DAR-BE-171: MoquiDefaultConf maps /elastic/* and /kibana/* to proxy servlets that hand any ElasticRemote
+         holder (the Moqui ADMIN group) raw OpenSearch, past Darpan's tenant filter. Moqui merges servlets and filters
+         by name and cannot remove one, so both auth filters demand a permission no group holds and both proxies
+         point at a closed local port. Override init-params only: an override's url-pattern is appended, not replaced. -->
+    <webapp-list>
+        <webapp name="webroot">
+            <filter name="ElasticAuthFilter"><init-param name="permission" value="DarpanProxyClosed"/></filter>
+            <filter name="KibanaAuthFilter"><init-param name="permission" value="DarpanProxyClosed"/></filter>
+            <servlet name="ElasticSearchProxy"><init-param name="proxyTo" value="http://127.0.0.1:9"/></servlet>
+            <servlet name="KibanaProxy"><init-param name="proxyTo" value="http://127.0.0.1:9"/></servlet>
+        </webapp>
+    </webapp-list>
+
     <!-- JWT_KEY: deployment-unique signing secret for any Darpan JWT-based flows (wired from the
          JWT_KEY env var, which is enforced non-empty by the container entrypoint).
          Accessible at runtime via ec.factory.getProperty('jwt_signing_key') or ${jwt_signing_key}. -->
