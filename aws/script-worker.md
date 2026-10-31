@@ -62,6 +62,10 @@ and deregisters the clone. A wall the control cannot cross either reads INCONCLU
   instance metadata are all unreachable, while the control reaches each. The ALB's SG and a worker-VPC neighbour are
   refused on 8090 while Moqui's SG connects. ECR resolves to the endpoint's 10.41.x address.
 - DNS Firewall works on the Free plan (the only unknown going in).
+- Moqui's real path, signed in, tenant SCRIPT_POC: `run#TenantScript` 1 + 1 = 2; a sum over input lines = 12 with its
+  `d:log` line; `forName('java.lang.Runtime')` NOT_ALLOWED; `while (true) {}` stopped at 2,000,001 units (956 ms).
+- Worker down (service at 0): the same call returns `WORKER: ... did not answer (ConnectException); the script was not
+  run`, 0 units, so Moqui never runs a script itself. Back at 1: the new task warms, Cloud Map re-points, first call ok.
 
 ## Learned
 
@@ -78,6 +82,5 @@ and deregisters the clone. A wall the control cannot cross either reads INCONCLU
 - Caller token built and image-tested (no/wrong token 401, right token runs) but NOT on UAT until the secret exists.
 - One worker JVM serves every tenant: an escape could see another tenant's in-flight input; per-tenant workers or a
   process per evaluation close it.
-- Moqui's real path (`run#TenantScript` with a login) and "worker down → WORKER, never local" not yet exercised on AWS.
 - No live S3 exfiltration test (see Learned); no deliberate wall-removal (mutation) run on AWS yet.
 - Images hand-built; base image carries curl/wget/perl/bash (distroless removes the toolkit, but the probe needs a shell).
