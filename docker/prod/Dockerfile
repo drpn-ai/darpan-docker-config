@@ -69,7 +69,8 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v2.1.11
+ARG DARPAN_REF=v2.1.12
+# darpan v2.1.12 moves alone: an audit can play the month that just ended (DAR-BE-178).
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
