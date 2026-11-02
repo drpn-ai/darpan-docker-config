@@ -43,10 +43,17 @@ fi
 sed -i 's|name="default_time_zone" value=""|name="default_time_zone" value="'"$TIME_ZONE"'"|g' "$CONF_FILE"
 sed -i 's|name="database_time_zone" value=""|name="database_time_zone" value="'"$TIME_ZONE"'"|g' "$CONF_FILE"
 
-# JDK 21 runtime flags. The --add-opens set is the canonical Spark 3.5.x JDK 17+/21 list
-# (Spark's own JavaModuleOptions); without it Spark SQL fails on sun.nio.ch.DirectBuffer at
-# SparkContext init. -XX:+EnableDynamicAgentLoading suppresses the ByteBuddy/Mockito agent
-# warning. --enable-native-access=ALL-UNNAMED quiets Netty/OpenSearch native-access warnings.
+# JDK 21 runtime flags. The --add-opens set follows Spark 4.2.1's own launcher list
+# (launcher/src/main/java/org/apache/spark/launcher/JavaModuleOptions.java, DAR-BE-185); without it
+# Spark SQL fails on sun.nio.ch.DirectBuffer at SparkContext init. jdk.internal.ref and the two
+# io.netty properties are new in Spark 4 (Netty 4.2 reflective buffer access, pooled allocator).
+# Left out of Spark's list on purpose:
+#   -Dio.netty.handler.ssl.defaultEndpointVerificationAlgorithm=NONE  turns off TLS hostname checks JVM-wide
+#   --sun-misc-unsafe-memory-access=allow                             a JDK 23+ flag; this image runs JDK 21
+#   --add-modules=jdk.incubator.vector                                optional incubator module, warns on every start
+#   -XX:+IgnoreUnrecognizedVMOptions                                  would hide a mistyped flag
+# -XX:+EnableDynamicAgentLoading suppresses the ByteBuddy/Mockito agent warning.
+# --enable-native-access=ALL-UNNAMED quiets Netty/OpenSearch native-access warnings.
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }\
 --add-opens=java.base/java.lang=ALL-UNNAMED \
 --add-opens=java.base/java.lang.invoke=ALL-UNNAMED \
@@ -57,11 +64,14 @@ export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }\
 --add-opens=java.base/java.util=ALL-UNNAMED \
 --add-opens=java.base/java.util.concurrent=ALL-UNNAMED \
 --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED \
+--add-opens=java.base/jdk.internal.ref=ALL-UNNAMED \
 --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
 --add-opens=java.base/sun.nio.cs=ALL-UNNAMED \
 --add-opens=java.base/sun.security.action=ALL-UNNAMED \
 --add-opens=java.base/sun.util.calendar=ALL-UNNAMED \
 --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED \
+-Dio.netty.tryReflectionSetAccessible=true \
+-Dio.netty.allocator.type=pooled \
 -XX:+EnableDynamicAgentLoading \
 --enable-native-access=ALL-UNNAMED"
 
