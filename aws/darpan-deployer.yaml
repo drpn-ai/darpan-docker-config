@@ -117,6 +117,14 @@ Resources:
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-TaskRole-*'
                 Condition:
                   StringEquals: { 'iam:PassedToService': ecs-tasks.amazonaws.com }
+              # CloudFormation resolves !GetAtt <Role>.Arn for the task definition with the caller's iam:GetRole
+              # (first deployer run failed with "Unable to retrieve Arn attribute for AWS::IAM::Role"). Read only.
+              - Sid: ReadTaskRoles
+                Effect: Allow
+                Action: iam:GetRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-TaskExecutionRole-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-TaskRole-*'
               - Sid: TaskAlarms
                 Effect: Allow
                 Action: [cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms, cloudwatch:DescribeAlarms, cloudwatch:TagResource]
