@@ -1,0 +1,760 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Darpan production on Darpan's own AWS project (DAR-OPS-006): one Moqui backend on ECS Fargate ARM64 behind an
+  HTTPS ALB, single-AZ RDS MySQL 8.4, EFS for runtime/datamanager run files. Derived from darpan-uat.yaml and kept
+  deliberately small: no NAT, no OpenSearch, no WAF, no Multi-AZ. Configuration arrives by the admin app's config
+  transfer (credentials sealed to this instance), not by a database dump, so run history is regenerated here.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: ALB(443, AllowedCidr) -> Fargate task :8080 (public subnet, no NAT) -> RDS (private) + EFS (private)
+    must:
+      - DesiredCount <= 1 (in-process Moqui scheduler; 2 tasks double-run automations)
+      - SchedulerEnabled stays false until cutover, so a rehearsal never runs a tenant's automations
+      - entity_ds_crypt_pass never changes once tenant connections exist (it decrypts every stored token)
+      - no secret values in this file or its parameters; Secrets Manager only
+      - no client or tenant names in this file (the repo is public)
+    ref: darpan-docker-config/docker/prod/Dockerfile, darpan-docker-config/docker/prod/entrypoint.sh, darpan-uat.yaml
+
+Parameters:
+  AllowedCidr:
+    Type: String
+    Description: >-
+      CIDR allowed to reach the load balancer. Your own a.b.c.d/32 during the rehearsal; 0.0.0.0/0 at cutover,
+      when this ALB becomes the public API.
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+  HostName:
+    Type: String
+    Description: Public name CNAMEd at the load balancer (rehearsal name first, then api.drpn.ai at cutover).
+    MinLength: 1
+  CertificateArn:
+    Type: String
+    Description: ACM certificate in this Region covering HostName (issued outside the stack; DNS validation at Netlify).
+    AllowedPattern: '^arn:aws:acm:.+'
+  ImageTag:
+    Type: String
+    Default: prod
+    Description: Tag of the darpan image in this stack's ECR repository.
+  DesiredCount:
+    Type: Number
+    Default: 0
+    AllowedValues: [0, 1]
+    Description: 0 until an image is pushed; then 1. Never more (see Metadata must).
+  SchedulerEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      false sets scheduled_job_check_time=0, so Moqui runs no scheduled job (no automations, no audits). Flip to
+      true only at cutover, after the old instance's automations are paused.
+  TaskCpu:
+    Type: String
+    Default: '2048'
+    AllowedValues: ['1024', '2048', '4096']
+  TaskMemory:
+    Type: String
+    Default: '8192'
+    AllowedValues: ['8192', '16384']
+    Description: Heap is 75% of this, capped at 6 GB by the image's JAVA_OPTS, so more than 8 GB buys little.
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.small
+    AllowedValues: [db.t4g.small, db.t4g.medium, db.t4g.large, db.m7g.large]
+    Description: db.t4g.small (2 GB) to start; Moqui's pool asks for up to 140 connections. Needs the Paid plan.
+  DbBackupRetentionDays:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    MaxValue: 35
+    Description: >-
+      Automated backup days. Kept short on purpose: run results and findings regenerate; what a backup really
+      protects is configuration, users and stored credentials.
+  UpgradeDataTypes:
+    Type: String
+    Default: seed,seed-initial,install,ext-seed,ext,darpan-seed-initial,darpan-seed
+    Description: >-
+      Data types the entrypoint loads before Moqui starts. The default is the first-boot load on an empty
+      database; switch to darpan-seed after the first successful boot.
+  AllowOrigins:
+    Type: String
+    Default: ''
+    Description: >-
+      Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (includes app.drpn.ai). Set
+      it during the rehearsal only, e.g. to add a local darpan-ui origin.
+  TimeZone:
+    Type: String
+    Default: UTC
+  AlertEmail:
+    Type: String
+    Description: Receives the alarm and budget emails (the alarm subscription needs one confirmation click).
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 175
+
+Conditions:
+  SchedulerOff: !Equals [!Ref SchedulerEnabled, 'false']
+  HasAllowOrigins: !Not [!Equals [!Ref AllowOrigins, '']]
+  HasTask: !Equals [!Ref DesiredCount, 1]
+
+Resources:
+  # ---------- Network ----------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: 10.50/16 so it never overlaps UAT's 10.40/16 if the two are ever peered
+    Properties:
+      CidrBlock: 10.50.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{ Key: Name, Value: !Ref AWS::StackName }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.50.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-public-a' }]
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.50.1.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-public-b' }]
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.50.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-private-a' }]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.50.11.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-private-b' }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private subnets keep the VPC's implicit main route table: local traffic only, no internet.
+
+  # ---------- Security groups ----------
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          the ALB is the public API after cutover, so AllowedCidr becomes 0.0.0.0/0 there by design; it is the only
+          public surface (the task, DB and EFS admit only the security group in front of them)
+        must: [port 80 only ever redirects to 443; nothing else listens]
+    Properties:
+      GroupDescription: Load balancer - HTTP (redirect) and HTTPS from AllowedCidr
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedCidr
+          Description: Redirect to HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref AllowedCidr
+          Description: Darpan API (TLS)
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Darpan task - 8080 from the load balancer only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+          Description: ALB to Moqui
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MySQL from the Darpan task only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: Darpan to MySQL
+
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: NFS from the Darpan task only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: Darpan to EFS
+
+  # ---------- Image registry ----------
+  Repository:
+    Type: AWS::ECR::Repository
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: images rebuild from darpan-docker-config at a pinned ref; 10 kept so a rollback is one ImageTag change
+    Properties:
+      RepositoryName: !Sub '${AWS::StackName}/darpan'
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"keep the 10 newest images",
+            "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},
+            "action":{"type":"expire"}}]}
+
+  # ---------- Secrets ----------
+  CryptPassSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          entity_ds_crypt_pass encrypts every tenant's stored OMS/Shopify/NetSuite tokens. Fresh for this instance:
+          the config transfer seals credentials to this instance, which stores them under this key
+        must: [never regenerate or replace once tenant connections are saved; retained on stack delete]
+    Properties:
+      Description: Darpan entity_ds_crypt_pass (production)
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  JwtKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: replacing it only signs every user out once
+    Properties:
+      Description: Darpan JWT_KEY (production)
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+
+  DbMasterSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          own secret instead of ManageMasterUserPassword: RDS rotates a managed master secret every 7 days by
+          default, while ECS injects secrets only at task start, so after a rotation every new DB connection the
+          running Moqui opens would fail until the task restarted
+        must: [no rotation unless the rotation also restarts the ECS service; no punctuation (the entrypoint seds conf values)]
+    Properties:
+      Description: Darpan MySQL master user (production)
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"darpanadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 40
+        ExcludePunctuation: true
+
+  # ---------- Database ----------
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Darpan private subnets
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+
+  DbParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: MoquiProductionConf sets pool-maxsize 140; t4g.small's formula default (~150) leaves no headroom for admin sessions
+    Properties:
+      Description: Darpan MySQL 8.4 (production)
+      Family: mysql8.4
+      Parameters:
+        max_connections: '200'
+        require_secure_transport: '1'
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          single-AZ on purpose (an AZ failure means a restore, tens of minutes, accepted for now); deletion
+          protection and a final snapshot because users, configuration and credentials live only here
+        must: [StorageEncrypted, not publicly accessible, DeletionProtection true]
+    Properties:
+      Engine: mysql
+      EngineVersion: '8.4'
+      DBInstanceClass: !Ref DbInstanceClass
+      DBName: darpan
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DbMasterSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DbMasterSecret}:SecretString:password}}'
+      AllocatedStorage: '20'
+      MaxAllocatedStorage: 100
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: false
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      DBParameterGroupName: !Ref DbParameterGroup
+      VPCSecurityGroups: [!Ref DbSecurityGroup]
+      BackupRetentionPeriod: !Ref DbBackupRetentionDays
+      PreferredBackupWindow: '19:00-19:30'
+      PreferredMaintenanceWindow: 'sun:20:00-sun:20:30'
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: true
+      CopyTagsToSnapshot: true
+
+  # ---------- Run files ----------
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          holds runtime/datamanager (reconciliation run files). Everything here regenerates by re-running, so no
+          backup plan and no retain; files untouched for 30 days move to Infrequent Access
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: elastic
+      BackupPolicy: { Status: DISABLED }
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+        - TransitionToPrimaryStorageClass: AFTER_1_ACCESS
+      FileSystemTags: [{ Key: Name, Value: !Sub '${AWS::StackName}-datamanager' }]
+
+  MountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref PrivateSubnetA
+      SecurityGroups: [!Ref EfsSecurityGroup]
+
+  MountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref PrivateSubnetB
+      SecurityGroups: [!Ref EfsSecurityGroup]
+
+  DatamanagerAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: every write lands as uid/gid 1000, so the volume is already right for the non-root moqui user (DAR-OPS-002)
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser: { Uid: '1000', Gid: '1000' }
+      RootDirectory:
+        Path: /datamanager
+        CreationInfo: { OwnerUid: '1000', OwnerGid: '1000', Permissions: '0775' }
+
+  # ---------- IAM ----------
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-darpan-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref CryptPassSecret
+                  - !Ref JwtKeySecret
+                  - !Ref DbMasterSecret
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: the app itself needs only EFS (IAM-authorized mount) and ECS Exec for debugging; no other AWS access
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: efs-and-exec
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [elasticfilesystem:ClientMount, elasticfilesystem:ClientWrite]
+                Resource: !GetAtt FileSystem.Arn
+                Condition:
+                  StringEquals: { 'elasticfilesystem:AccessPointArn': !GetAtt DatamanagerAccessPoint.Arn }
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: '*'
+
+  # ---------- Logs ----------
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}/darpan'
+      RetentionInDays: 30
+
+  # ---------- Load balancer ----------
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: 300 s idle timeout because some JSON-RPC calls (run now, transfer apply) take minutes; no access logs (cut)
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '300'
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          /status answers only 127.0.0.1 (webroot.xml) and logs every rejection, so the ALB probes / instead.
+          Tuned for one task replaced in place: 10 s probes mark a new task healthy ~40 s sooner than 30 s,
+          and 15 s draining (was 60) because nobody is left on the old task to drain. 10 misses x 10 s keeps
+          the same ~100 s tolerance before a busy task (long run, GC) is marked unhealthy and replaced.
+        must: [UnhealthyThresholdCount x HealthCheckIntervalSeconds >= 100]
+    Properties:
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8080
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 10
+      Matcher: { HttpCode: '200-399' }
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '15'
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig: { Protocol: HTTPS, Port: '443', StatusCode: HTTP_301 }
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: TLS ends at the ALB; it forwards plain HTTP to :8080 with X-Forwarded-Proto https, which Moqui reads to stop its https redirect
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates: [{ CertificateArn: !Ref CertificateArn }]
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ---------- Compute ----------
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Container Insights off (cut); the alarms below read the free AWS/ECS and AWS/ApplicationELB metrics
+    Properties:
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-darpan'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      Volumes:
+        - Name: datamanager
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref FileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !Ref DatamanagerAccessPoint
+              IAM: ENABLED
+      ContainerDefinitions:
+        - Name: darpan
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${Repository}:${ImageTag}'
+          Essential: true
+          StopTimeout: 120
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          MountPoints:
+            - SourceVolume: datamanager
+              ContainerPath: /moqui-framework/runtime/datamanager
+          Environment:
+            - { Name: Moqui_DB_HOST, Value: !GetAtt Database.Endpoint.Address }
+            - { Name: Moqui_DB_NAME, Value: darpan }
+            - { Name: Moqui_HOST, Value: !Ref HostName }
+            - { Name: TIME_ZONE, Value: !Ref TimeZone }
+            - { Name: DARPAN_LOAD_UPGRADE_DATA, Value: 'Y' }
+            - { Name: DARPAN_UPGRADE_DATA_TYPES, Value: !Ref UpgradeDataTypes }
+            # Moqui reads an env var named like a default-property in place of the conf value; 0 = no scheduler.
+            - !If
+              - SchedulerOff
+              - { Name: scheduled_job_check_time, Value: '0' }
+              - !Ref AWS::NoValue
+            - !If
+              - HasAllowOrigins
+              - { Name: Moqui_WEBAPP_ALLOW_ORIGINS, Value: !Ref AllowOrigins }
+              - !Ref AWS::NoValue
+          Secrets:
+            - { Name: Moqui_DB_USER, ValueFrom: !Sub '${DbMasterSecret}:username::' }
+            - { Name: Moqui_DB_PASSWORD, ValueFrom: !Sub '${DbMasterSecret}:password::' }
+            - { Name: entity_ds_crypt_pass, ValueFrom: !Ref CryptPassSecret }
+            - { Name: JWT_KEY, ValueFrom: !Ref JwtKeySecret }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: darpan
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [HttpsListener, MountTargetA, MountTargetB]
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          replace-in-place deploys (0% min healthy) so two schedulers never overlap; a deploy is a few minutes of
+          downtime while the new task boots. Long grace covers the first-boot data load
+        must: [DesiredCount <= 1, MaximumPercent 100]
+    Properties:
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      EnableExecuteCommand: true
+      HealthCheckGracePeriodSeconds: 1800
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+          SecurityGroups: [!Ref AppSecurityGroup]
+      LoadBalancers:
+        - ContainerName: darpan
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+
+  # ---------- Alarms ----------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          unencrypted on purpose: CloudWatch cannot publish to a topic under the AWS-managed aws/sns key, and the
+          messages carry only alarm names and metric values
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-alerts'
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  NoHealthyTaskAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasTask
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: 10 minutes so an ordinary deploy (old task stops, new one boots) does not page
+    Properties:
+      AlarmDescription: Darpan has had no healthy task behind the load balancer for 10 minutes
+      Namespace: AWS/ApplicationELB
+      MetricName: HealthyHostCount
+      Dimensions:
+        - { Name: TargetGroup, Value: !GetAtt TargetGroup.TargetGroupFullName }
+        - { Name: LoadBalancer, Value: !GetAtt LoadBalancer.LoadBalancerFullName }
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 10
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  Target5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Moqui answered more than 25 server errors in 5 minutes
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - { Name: LoadBalancer, Value: !GetAtt LoadBalancer.LoadBalancerFullName }
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 25
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  TaskMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasTask
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: heap is capped at 6 GB of 8, so steady 92%+ means native memory is near the cgroup limit (OOM kill next)
+    Properties:
+      AlarmDescription: Darpan task memory above 92% for 10 minutes
+      Namespace: AWS/ECS
+      MetricName: MemoryUtilization
+      Dimensions:
+        - { Name: ClusterName, Value: !Ref Cluster }
+        - { Name: ServiceName, Value: !GetAtt Service.Name }
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 92
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  DbCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Darpan MySQL CPU above 80% for 15 minutes (burstable credits draining)
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - { Name: DBInstanceIdentifier, Value: !Ref Database }
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  # ---------- Cost guard ----------
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${AWS::StackName}-monthly'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: { Amount: !Ref MonthlyBudgetUsd, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
+        - Notification: { NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
+
+Outputs:
+  BaseUrl:
+    Value: !Sub 'https://${HostName}'
+  LoadBalancerDnsName:
+    Description: CNAME target for HostName
+    Value: !GetAtt LoadBalancer.DNSName
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  LogGroupName:
+    Value: !Ref LogGroup
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  AlertTopicArn:
+    Value: !Ref AlertTopic

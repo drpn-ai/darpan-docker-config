@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Darpan image builder (DAR-OPS-006): one CodeBuild project (ARM64, privileged Docker) that builds the backend
+  image from the public darpan-docker-config repo at a given commit and pushes it to this project's ECR repo,
+  so deploys stop uploading ~1.4 GB from a laptop. aws/deploy.sh starts it with --builder codebuild. It only
+  builds and pushes: rolling the ECS service stays in deploy.sh's reviewed change set.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    must:
+      - builds only from public repos (no GitHub credentials anywhere in this stack)
+      - role may push to the one ECR repo named by EcrRepositoryName, nothing else
+      - no secrets or client names in this file (the repo is public)
+    ref: darpan-docker-config/aws/deploy.sh, darpan-docker-config/aws/darpan-prod.yaml
+
+Parameters:
+  EcrRepositoryName:
+    Type: String
+    Default: darpan-prod/darpan
+    Description: ECR repository the build pushes to (created by the app stack).
+  SourceRepoUrl:
+    Type: String
+    Default: https://github.com/drpn-ai/darpan-docker-config.git
+  ComputeType:
+    Type: String
+    Default: BUILD_GENERAL1_LARGE
+    AllowedValues: [BUILD_GENERAL1_SMALL, BUILD_GENERAL1_MEDIUM, BUILD_GENERAL1_LARGE]
+    Description: LARGE = 8 vCPU / 16 GB on ARM; the Gradle step wants the memory.
+
+Resources:
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}'
+      RetentionInDays: 30
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: push to one ECR repo and write its own logs; no other AWS access
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: push-image-and-log
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub '${BuildLogGroup.Arn}:*'
+
+  ImageBuild:
+    Type: AWS::CodeBuild::Project
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          NO_SOURCE + inline buildspec: the build clones the public repo itself at DEPLOY_SHA, takes base.Dockerfile
+          from origin/main (older tags predate aws/), and adds the Maven mirror init script only when MAVEN_MIRROR=1.
+          Fresh hosts have no layer cache, so component clones are always fresh.
+        must: [PrivilegedMode true (docker build), ConcurrentBuildLimit 1]
+    Properties:
+      Name: !Ref AWS::StackName
+      Description: Build + push the Darpan backend image (DAR-OPS-006)
+      ServiceRole: !GetAtt BuildRole.Arn
+      ConcurrentBuildLimit: 1
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 30
+      Artifacts: { Type: NO_ARTIFACTS }
+      LogsConfig:
+        CloudWatchLogs: { Status: ENABLED, GroupName: !Ref BuildLogGroup }
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: !Ref ComputeType
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - { Name: SOURCE_REPO_URL, Value: !Ref SourceRepoUrl }
+          - { Name: ECR_REPOSITORY, Value: !Ref EcrRepositoryName }
+          - { Name: DEPLOY_SHA, Value: '' }
+          - { Name: DOCKERFILE, Value: docker/prod/Dockerfile }
+          - { Name: IMAGE_TAG, Value: '' }
+          - { Name: MAVEN_MIRROR, Value: '0' }
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          env:
+            shell: bash
+          phases:
+            pre_build:
+              commands:
+                - set -euo pipefail
+                - test -n "$DEPLOY_SHA" && test -n "$IMAGE_TAG" || { echo "DEPLOY_SHA and IMAGE_TAG are required"; exit 1; }
+                - echo "REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com" > /tmp/build.env
+                - source /tmp/build.env && aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+                - git clone --quiet "$SOURCE_REPO_URL" src
+                - git -C src checkout --quiet --detach "$DEPLOY_SHA"
+                - git -C src show origin/main:aws/base.Dockerfile > base.Dockerfile
+            build:
+              commands:
+                - set -euo pipefail
+                - source /tmp/build.env
+                - export DOCKER_BUILDKIT=1
+                - mkdir -p empty && docker build --quiet -f base.Dockerfile -t darpan-base:22.04 empty
+                - cp "src/$DOCKERFILE" src/Dockerfile.deploy
+                - |
+                  if [ "$MAVEN_MIRROR" = 1 ]; then
+                    cat > src/maven-mirror.init.gradle <<'EOF'
+                  def MIRROR = 'https://maven-central.storage-download.googleapis.com/maven2/'
+                  def redirect = { repos -> repos.configureEach { r -> if (r instanceof MavenArtifactRepository && r.url.toString().contains('repo.maven.apache.org')) r.url = MIRROR } }
+                  beforeSettings { s -> s.pluginManagement.repositories { maven { url = MIRROR }; gradlePluginPortal() } }
+                  allprojects { p -> redirect(p.repositories); redirect(p.buildscript.repositories) }
+                  EOF
+                    awk '{ print } /^ENV GRADLE_USER_HOME=/ { print "COPY maven-mirror.init.gradle ${GRADLE_USER_HOME}/init.d/maven-mirror.gradle"; n++ } END { if (n != 1) exit 1 }' \
+                      "src/$DOCKERFILE" > src/Dockerfile.deploy
+                    echo "Maven Central via Google's mirror"
+                  fi
+                - >-
+                  docker build -f src/Dockerfile.deploy --build-arg BASE_IMAGE=darpan-base:22.04
+                  --label org.opencontainers.image.revision="$DEPLOY_SHA"
+                  -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" src
+                - |
+                  docker run --rm --entrypoint sh "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" -c \
+                    'for d in /moqui-framework /moqui-framework/runtime /moqui-framework/runtime/component/*; do
+                       [ -d "$d/.git" ] && echo "component: ${d##*/} $(git -C "$d" log -1 --format="%h %cs %s" | cut -c1-70)"
+                     done' || true
+            post_build:
+              commands:
+                - set -euo pipefail
+                - source /tmp/build.env
+                - test "$CODEBUILD_BUILD_SUCCEEDING" = 1
+                - docker push --quiet "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+                - echo "pushed $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+Outputs:
+  ProjectName:
+    Value: !Ref ImageBuild
+  LogGroupName:
+    Value: !Ref BuildLogGroup
