@@ -147,14 +147,22 @@ Resources:
                   - ec2:DescribeSecurityGroupRules
                   - elasticloadbalancing:DescribeTargetHealth
                   - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeLoadBalancers
                 Resource: '*'
+              # CloudFormation resolves !GetAtt Database.Endpoint.Address for the task definition with the caller's
+              # permissions (second deployer run failed: 'not authorized to perform: rds:DescribeDBInstances'). Read only,
+              # the app stack's own instance (CloudFormation lower-cases the stack name in the identifier).
+              - Sid: ReadAppDatabase
+                Effect: Allow
+                Action: rds:DescribeDBInstances
+                Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${AppStackName}-database-*'
               - Sid: BuildImage
                 Effect: Allow
                 Action: [codebuild:StartBuild, codebuild:BatchGetBuilds, codebuild:BatchGetProjects]
                 Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${BuildProjectName}'
               - Sid: ImageTag
                 Effect: Allow
-                Action: ecr:DescribeImages
+                Action: [ecr:DescribeImages, ecr:DescribeRepositories]
                 Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
               - Sid: ReadBuildAndAppLogs
                 Effect: Allow
