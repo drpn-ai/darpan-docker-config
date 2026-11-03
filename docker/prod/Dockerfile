@@ -142,9 +142,10 @@ ARG MOQUI_GQL_REF=v0.1.1
 # darpan-agent (DAR-BE-159): the embedded Claude agent. Off unless DARPAN_AGENT_ENABLED=true AND a tenant has
 # agentEnabled=Y; it reads ANTHROPIC_API_KEY from the container env at run time (never baked into the image). Like
 # moqui-gql it compileOnly-depends on darpan, so it is built by its own jar task below.
-# No darpan-agent tag exists yet (the repo is not created); `main` until its first release tag, then pin it here
-# with DARPAN_REF.
-ARG DARPAN_AGENT_REF=main
+# v0.1.0 is cut together with the darpan release that carries DAR-BE-159. DARPAN_REF must move to that release at
+# the same time: darpan v2.1.12 lacks the agent entities, so this ref cannot build against it. (The tag does not
+# exist yet; a prod build fails at the clone until it does.)
+ARG DARPAN_AGENT_REF=v0.1.0
 
 WORKDIR /
 
