@@ -17,7 +17,7 @@
 ARG BASE_IMAGE=600735190428.dkr.ecr.us-east-1.amazonaws.com/maarg-base-os:OS-22.04-latest
 
 # JDK 21 provider stage. maarg-base-os ships JDK 11 as the default `java`, but Moqui 4, the upstream
-# framework's Gradle 9 (refuses to RUN on < JVM 17), and Spark 3.5 all require JDK 21. Copy a
+# framework's Gradle 9 (refuses to RUN on < JVM 17), and Spark 4.2 all require JDK 21. Copy a
 # self-contained Temurin 21 (Ubuntu/glibc — ABI-compatible with the 22.04 base) instead of depending
 # on the base image's apt sources. eclipse-temurin:21-jdk is the same JDK image docker/simple uses.
 FROM eclipse-temurin:21-jdk AS jdk21
@@ -178,7 +178,7 @@ ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="/opt/java/openjdk/bin:${PATH}"
 
 # Fail the build immediately if the active java is not JDK 21 (e.g. base-image PATH drift
-# re-exposing its bundled JDK 11). Everything downstream (Gradle 9, Moqui 4, Spark 3.5) requires 21.
+# re-exposing its bundled JDK 11). Everything downstream (Gradle 9, Moqui 4, Spark 4.2) requires 21.
 RUN java -version 2>&1 | grep -q 'version "21' \
     || { echo "ERROR: active java is not JDK 21:" >&2; java -version >&2; exit 1; }
 
