@@ -288,8 +288,14 @@ print(json.dumps([{"ParameterKey": k, "ParameterValue": sets[k]} if k in sets
 PY
 
 CS="deploy-$(date -u +%Y%m%d%H%M%S)"
+# The deployer project sets DARPAN_CFN_ROLE_ARN (its StackUpdateRole): CloudFormation then applies the update as that
+# role, which holds the reads a stack update resolves (task role ARNs, DB endpoint, the Database's secret reference) so
+# the deployer's own role never does (DAR-OPS-010). Unset (a local run): CloudFormation uses the role the stack was
+# last updated with, or the caller when it has none.
+ROLE_ARGS=()
+[ -n "${DARPAN_CFN_ROLE_ARN:-}" ] && ROLE_ARGS=(--role-arn "$DARPAN_CFN_ROLE_ARN")
 aws cloudformation create-change-set --stack-name "$STACK" --change-set-name "$CS" --use-previous-template \
-  --capabilities CAPABILITY_IAM --parameters "file://$WORK/params.json" >/dev/null
+  --capabilities CAPABILITY_IAM --parameters "file://$WORK/params.json" ${ROLE_ARGS[@]+"${ROLE_ARGS[@]}"} >/dev/null
 if ! aws cloudformation wait change-set-create-complete --stack-name "$STACK" --change-set-name "$CS" 2>/dev/null; then
   reason=$(aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$CS" --query StatusReason --output text)
   aws cloudformation delete-change-set --stack-name "$STACK" --change-set-name "$CS" >/dev/null 2>&1 || true

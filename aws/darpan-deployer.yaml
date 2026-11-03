@@ -10,8 +10,9 @@ Metadata:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
     must:
-      - the role may change the app stack and the resources a deploy touches (task definitions, the service, its
-        alarms, the ALB security group ingress for AllowedCidr), nothing else; no IAM writes, no data-store access
+      - the deployer role plans and starts app-stack updates only; CloudFormation applies them as StackUpdateRole, which
+        may change only what a deploy touches (task definitions, the service, its alarms, the ALB SG ingress) and read
+        what a stack update resolves (task role ARNs, DB endpoint and master secret, ALB, repository); no IAM writes
       - deploy.sh's own rails stay in force (change-set whitelist, DesiredCount <= 1, boot-log check)
       - no secrets or client names in this file (the repo is public)
     ref: darpan-docker-config/aws/deploy.sh, darpan-docker-config/aws/darpan-prod.yaml, darpan-docker-config/aws/darpan-build.yaml
@@ -47,9 +48,11 @@ Resources:
     Metadata:
       com.aws.cloudformation.Context:
         why: >-
-          CloudFormation applies the change set with the caller's permissions, so the role holds what a deploy's
-          change set touches (TaskDefinition replace, Service update, the two task alarms, ALB SG ingress) plus the
-          reads deploy.sh makes. iam:PassRole only for the app stack's task roles, only to ECS tasks.
+          The deployer's own identity: it plans and starts stack updates, but CloudFormation applies them as
+          StackUpdateRole (passed with --role-arn), so this role holds only what deploy.sh itself calls: change sets
+          on the app stack, the image build, the force-new-deployment of --restart, and reads for the health checks.
+          It cannot register task definitions, pass the task roles, touch the ALB security group or read any secret.
+        must: [no secretsmanager access, iam:PassRole only for StackUpdateRole and only to cloudformation]
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -82,8 +85,74 @@ Resources:
                 Effect: Allow
                 Action: [cloudformation:DescribeEvents, cloudformation:DescribeStackEvents]
                 Resource: '*'
-              # RegisterTaskDefinition / DescribeTaskDefinition support no resource scoping; everything else is pinned to
-              # the app stack's own cluster, service and task-definition family (CloudFormation-generated names).
+              - Sid: PassStackUpdateRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt StackUpdateRole.Arn
+                Condition:
+                  StringEquals: { 'iam:PassedToService': cloudformation.amazonaws.com }
+              # --restart forces a new deployment of the same task definition directly (no change set).
+              - Sid: EcsAppService
+                Effect: Allow
+                Action: [ecs:DescribeServices, ecs:UpdateService]
+                Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${AppStackName}-Cluster-*/${AppStackName}-Service-*'
+              - Sid: EcsAppTasks
+                Effect: Allow
+                Action: [ecs:ListTasks, ecs:DescribeTasks]
+                Resource:
+                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:container-instance/${AppStackName}-Cluster-*/*'
+                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/${AppStackName}-Cluster-*/*'
+                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${AppStackName}-Cluster-*'
+              - Sid: HealthReads
+                Effect: Allow
+                Action: [elasticloadbalancing:DescribeTargetHealth, elasticloadbalancing:DescribeTargetGroups]
+                Resource: '*'
+              - Sid: BuildImage
+                Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds, codebuild:BatchGetProjects]
+                Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${BuildProjectName}'
+              - Sid: ImageTag
+                Effect: Allow
+                Action: ecr:DescribeImages
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+              - Sid: ReadBuildAndAppLogs
+                Effect: Allow
+                Action: [logs:GetLogEvents, logs:FilterLogEvents]
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${BuildProjectName}:*'
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${AppStackName}/darpan:*'
+              - Sid: OwnLogs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub '${DeployLogGroup.Arn}:*'
+
+  StackUpdateRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          CloudFormation's service role for the app stack. A stack update resolves every !GetAtt and dynamic reference
+          it touches with the executing identity: the task roles' ARNs (iam:GetRole), the DB endpoint
+          (rds:DescribeDBInstances), the Database's {{resolve:secretsmanager}} master credentials, and the ALB, target
+          group and repository in the outputs and alarms. Three deployer runs failed one missing read at a time; this
+          role holds them so the deployer never does. Writes stay limited to what a deploy changes: task definition,
+          service, the stack's alarms and the ALB security group ingress (AllowedCidr).
+        must: [assumable only by cloudformation in this account, no rds/efs/secret writes]
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: update-app-stack
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # RegisterTaskDefinition / DescribeTaskDefinition support no resource scoping.
               - Sid: EcsTaskDefinitions
                 Effect: Allow
                 Action: [ecs:RegisterTaskDefinition, ecs:DescribeTaskDefinition]
@@ -100,15 +169,6 @@ Resources:
                 Resource: '*'
                 Condition:
                   StringLike: { 'ecs:task-definition': !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-darpan:*' }
-              - Sid: EcsAppTasks
-                Effect: Allow
-                Action: [ecs:ListTasks, ecs:DescribeTasks]
-                Resource:
-                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:container-instance/${AppStackName}-Cluster-*/*'
-                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/${AppStackName}-Cluster-*/*'
-                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${AppStackName}-Cluster-*'
-              # Only the app's two task roles: a bare '${AppStackName}-*' would also match this deployer's role and the
-              # image builder's (darpan-prod-deployer-*, darpan-prod-build-*).
               - Sid: PassTaskRoles
                 Effect: Allow
                 Action: iam:PassRole
@@ -117,8 +177,6 @@ Resources:
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-TaskRole-*'
                 Condition:
                   StringEquals: { 'iam:PassedToService': ecs-tasks.amazonaws.com }
-              # CloudFormation resolves !GetAtt <Role>.Arn for the task definition with the caller's iam:GetRole
-              # (first deployer run failed with "Unable to retrieve Arn attribute for AWS::IAM::Role"). Read only.
               - Sid: ReadTaskRoles
                 Effect: Allow
                 Action: iam:GetRole
@@ -145,35 +203,23 @@ Resources:
                 Action:
                   - ec2:DescribeSecurityGroups
                   - ec2:DescribeSecurityGroupRules
-                  - elasticloadbalancing:DescribeTargetHealth
                   - elasticloadbalancing:DescribeTargetGroups
                   - elasticloadbalancing:DescribeLoadBalancers
                 Resource: '*'
-              # CloudFormation resolves !GetAtt Database.Endpoint.Address for the task definition with the caller's
-              # permissions (second deployer run failed: 'not authorized to perform: rds:DescribeDBInstances'). Read only,
-              # the app stack's own instance (CloudFormation lower-cases the stack name in the identifier).
               - Sid: ReadAppDatabase
                 Effect: Allow
                 Action: rds:DescribeDBInstances
                 Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${AppStackName}-database-*'
-              - Sid: BuildImage
+              # The Database's MasterUsername/MasterUserPassword are {{resolve:secretsmanager:DbMasterSecret}}; every
+              # stack update re-resolves them. Read only, the app stack's DB secret only (its generated name).
+              - Sid: ResolveDbMasterSecret
                 Effect: Allow
-                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds, codebuild:BatchGetProjects]
-                Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${BuildProjectName}'
-              - Sid: ImageTag
+                Action: [secretsmanager:GetSecretValue, secretsmanager:DescribeSecret]
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:DbMasterSecret-*'
+              - Sid: RepositoryOutput
                 Effect: Allow
-                Action: [ecr:DescribeImages, ecr:DescribeRepositories]
+                Action: [ecr:DescribeRepositories]
                 Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
-              - Sid: ReadBuildAndAppLogs
-                Effect: Allow
-                Action: [logs:GetLogEvents, logs:FilterLogEvents]
-                Resource:
-                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${BuildProjectName}:*'
-                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${AppStackName}/darpan:*'
-              - Sid: OwnLogs
-                Effect: Allow
-                Action: [logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub '${DeployLogGroup.Arn}:*'
 
   Deployer:
     Type: AWS::CodeBuild::Project
@@ -203,6 +249,8 @@ Resources:
           - { Name: SCRIPTS_REF, Value: main }
           - { Name: DEPLOY_ENV, Value: !Ref DeployEnv }
           - { Name: DEPLOY_ARGS, Value: '' }
+          # deploy.sh passes it to create-change-set (--role-arn): CloudFormation applies the update as this role.
+          - { Name: DARPAN_CFN_ROLE_ARN, Value: !GetAtt StackUpdateRole.Arn }
           # deploy.sh's account guard: this project can only ever run in its own account.
           - { Name: !Sub 'DARPAN_${DeployEnv}_ACCOUNT', Value: !Ref AWS::AccountId }
       Source:
