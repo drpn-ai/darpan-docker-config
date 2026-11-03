@@ -67,7 +67,7 @@ ARG MOQUI_RUNTIME_REF=v3.9.9
 # moqui-atomikos retired: Moqui 4 embeds Bitronix as the default JTA TM; no separate Atomikos component needed.
 ARG MOQUI_SFTP_REF=v1.0.3
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# TESTING VARIANT — tag v0.0.3 (supersedes v0.0.2). All six drpn-ai product components (darpan,
+# TESTING VARIANT — tag v0.0.4 (supersedes v0.0.3). All six drpn-ai product components (darpan,
 # darpan-hotwax, shopify-darpan, netsuite-darpan, database-darpan, moqui-gql) track `main` instead
 # of release tags, so a prod-shaped image can be built from unreleased code. Everything else is the
 # production build unchanged: the same hardened base image, prod entrypoint, JSON logging, and the
