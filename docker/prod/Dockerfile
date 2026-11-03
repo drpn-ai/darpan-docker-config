@@ -17,7 +17,7 @@
 ARG BASE_IMAGE=600735190428.dkr.ecr.us-east-1.amazonaws.com/maarg-base-os:OS-22.04-latest
 
 # JDK 21 provider stage. maarg-base-os ships JDK 11 as the default `java`, but Moqui 4, the upstream
-# framework's Gradle 9 (refuses to RUN on < JVM 17), and Spark 3.5 all require JDK 21. Copy a
+# framework's Gradle 9 (refuses to RUN on < JVM 17), and Spark 4.2 all require JDK 21. Copy a
 # self-contained Temurin 21 (Ubuntu/glibc — ABI-compatible with the 22.04 base) instead of depending
 # on the base image's apt sources. eclipse-temurin:21-jdk is the same JDK image docker/simple uses.
 FROM eclipse-temurin:21-jdk AS jdk21
@@ -93,9 +93,9 @@ ARG MOQUI_SFTP_REF=v1.0.3
 #
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
-# pre-reset refs. Released prod pins these refs to tags: darpan v2.1.0, darpan-hotwax v0.10.0,
-# shopify-darpan v0.8.0, netsuite-darpan v0.4.0, database-darpan v0.2.1, moqui-gql v0.1.0 as of this
-# branch point.
+# pre-reset refs. Released prod pins these refs to tags: darpan v2.1.12, darpan-hotwax v0.10.4,
+# shopify-darpan v0.8.5, netsuite-darpan v0.4.3, database-darpan v0.2.2, moqui-gql v0.1.1 as of this
+# branch point (v0.0.4).
 ARG DARPAN_REF=main
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
@@ -178,7 +178,7 @@ ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="/opt/java/openjdk/bin:${PATH}"
 
 # Fail the build immediately if the active java is not JDK 21 (e.g. base-image PATH drift
-# re-exposing its bundled JDK 11). Everything downstream (Gradle 9, Moqui 4, Spark 3.5) requires 21.
+# re-exposing its bundled JDK 11). Everything downstream (Gradle 9, Moqui 4, Spark 4.2) requires 21.
 RUN java -version 2>&1 | grep -q 'version "21' \
     || { echo "ERROR: active java is not JDK 21:" >&2; java -version >&2; exit 1; }
 
