@@ -99,7 +99,14 @@ for kv in ${SETS[@]+"${SETS[@]}"}; do
   fi
 done
 
-export AWS_PROFILE=$PROFILE AWS_REGION=$REGION AWS_PAGER=""
+# Inside AWS (the darpan-<env>-deployer CodeBuild project, aws/darpan-deployer.yaml) the build role's own
+# credentials are used; on a laptop, the named CLI profile.
+if [ -n "${CODEBUILD_BUILD_ID:-}" ]; then
+  unset AWS_PROFILE; export AWS_REGION=$REGION AWS_PAGER=""
+  PROFILE="(CodeBuild role)"
+else
+  export AWS_PROFILE=$PROFILE AWS_REGION=$REGION AWS_PAGER=""
+fi
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/darpan-deploy.XXXXXX")
 WT=
 cleanup() {
@@ -125,9 +132,19 @@ verify() {
   log "waiting for the ECS service to settle"
   aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE" \
     || die 7 "service not stable; logs: aws logs tail /ecs/$STACK/darpan --since 15m --profile $PROFILE"
+  # /Login from here; when this runner cannot reach the ALB at all (000: its AllowedCidr admits one office IP,
+  # not a CodeBuild host), the ALB's own health check of the target stands in.
+  local tg
+  tg=$(aws cloudformation describe-stack-resource --stack-name "$STACK" --logical-resource-id TargetGroup \
+        --query StackResourceDetail.PhysicalResourceId --output text 2>/dev/null || true)
   for _ in $(seq 1 40); do
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/Login" || true)
     [ "$code" = 200 ] && break
+    if [ "$code" = 000 ] && [ -n "$tg" ] && [ "$(aws elbv2 describe-target-health --target-group-arn "$tg" \
+         --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' --output text 2>/dev/null)" -ge 1 ] 2>/dev/null; then
+      log "$BASE is not reachable from this runner; the ALB reports the target healthy"
+      code=200; break
+    fi
     sleep 15
   done
   [ "$code" = 200 ] || die 7 "$BASE/Login answered $code after ~10 min; logs: aws logs tail /ecs/$STACK/darpan --since 15m --profile $PROFILE"

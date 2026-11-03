@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Darpan deployer (DAR-OPS-010): one CodeBuild project that runs aws/deploy.sh inside AWS, so "deploy prod" is a
+  single start-build of this project (no laptop, no CLI profile). It clones this public repo, runs deploy.sh with the
+  arguments given (build in <env>-build, change set on the app stack, roll the task, check health and the boot log),
+  under a role that can change only the app stack and what a deploy touches.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    must:
+      - the role may change the app stack and the resources a deploy touches (task definitions, the service, its
+        alarms, the ALB security group ingress for AllowedCidr), nothing else; no IAM writes, no data-store access
+      - deploy.sh's own rails stay in force (change-set whitelist, DesiredCount <= 1, boot-log check)
+      - no secrets or client names in this file (the repo is public)
+    ref: darpan-docker-config/aws/deploy.sh, darpan-docker-config/aws/darpan-prod.yaml, darpan-docker-config/aws/darpan-build.yaml
+
+Parameters:
+  DeployEnv:
+    Type: String
+    Default: prod
+    AllowedValues: [prod, uat]
+    Description: The deploy.sh target this project runs.
+  AppStackName:
+    Type: String
+    Default: darpan-prod
+  BuildProjectName:
+    Type: String
+    Default: darpan-prod-build
+  EcrRepositoryName:
+    Type: String
+    Default: darpan-prod/darpan
+  SourceRepoUrl:
+    Type: String
+    Default: https://github.com/drpn-ai/darpan-docker-config.git
+
+Resources:
+  DeployLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}'
+      RetentionInDays: 90
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          CloudFormation applies the change set with the caller's permissions, so the role holds what a deploy's
+          change set touches (TaskDefinition replace, Service update, the two task alarms, ALB SG ingress) plus the
+          reads deploy.sh makes. iam:PassRole only for the app stack's task roles, only to ECS tasks.
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: deploy-app-stack
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AppStack
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:GetTemplate
+                Resource:
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppStackName}/*'
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:changeSet/deploy-*/*'
+              - Sid: StackEvents
+                Effect: Allow
+                Action: [cloudformation:DescribeEvents, cloudformation:DescribeStackEvents]
+                Resource: '*'
+              - Sid: EcsDeploy
+                Effect: Allow
+                Action:
+                  - ecs:RegisterTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                  - ecs:ListTasks
+                  - ecs:DescribeTasks
+                  - ecs:TagResource
+                Resource: '*'
+              - Sid: PassTaskRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
+                Condition:
+                  StringEquals: { 'iam:PassedToService': ecs-tasks.amazonaws.com }
+              - Sid: TaskAlarms
+                Effect: Allow
+                Action: [cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms, cloudwatch:DescribeAlarms, cloudwatch:TagResource]
+                Resource: !Sub 'arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AppStackName}-*'
+              - Sid: AlbIngressForAllowedCidr
+                Effect: Allow
+                Action:
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:UpdateSecurityGroupRuleDescriptionsIngress
+                Resource: !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*'
+                Condition:
+                  StringEquals: { 'aws:ResourceTag/aws:cloudformation:stack-name': !Ref AppStackName }
+              - Sid: Reads
+                Effect: Allow
+                Action:
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSecurityGroupRules
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeTargetGroups
+                Resource: '*'
+              - Sid: BuildImage
+                Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds, codebuild:BatchGetProjects]
+                Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${BuildProjectName}'
+              - Sid: ImageTag
+                Effect: Allow
+                Action: ecr:DescribeImages
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+              - Sid: ReadBuildAndAppLogs
+                Effect: Allow
+                Action: [logs:GetLogEvents, logs:FilterLogEvents]
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${BuildProjectName}:*'
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${AppStackName}/darpan:*'
+              - Sid: OwnLogs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub '${DeployLogGroup.Arn}:*'
+
+  Deployer:
+    Type: AWS::CodeBuild::Project
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          NO_SOURCE + inline buildspec: clones the public repo at SCRIPTS_REF (default main) for deploy.sh itself and
+          passes DEPLOY_ARGS through, e.g. "--ref v0.0.4", "--tag <tag> --set DesiredCount=1", "--restart". deploy.sh
+          always runs with --yes here: starting a build of this project IS the decision to deploy.
+        must: [ConcurrentBuildLimit 1 (one deploy at a time), no PrivilegedMode (no Docker needed)]
+    Properties:
+      Name: !Sub '${AWS::StackName}'
+      Description: !Sub 'Deploy the Darpan backend to ${DeployEnv} with aws/deploy.sh (DAR-OPS-010)'
+      ServiceRole: !GetAtt DeployRole.Arn
+      ConcurrentBuildLimit: 1
+      TimeoutInMinutes: 45
+      QueuedTimeoutInMinutes: 30
+      Artifacts: { Type: NO_ARTIFACTS }
+      LogsConfig:
+        CloudWatchLogs: { Status: ENABLED, GroupName: !Ref DeployLogGroup }
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        EnvironmentVariables:
+          - { Name: SOURCE_REPO_URL, Value: !Ref SourceRepoUrl }
+          - { Name: SCRIPTS_REF, Value: main }
+          - { Name: DEPLOY_ENV, Value: !Ref DeployEnv }
+          - { Name: DEPLOY_ARGS, Value: '' }
+          # deploy.sh's account guard: this project can only ever run in its own account.
+          - { Name: !Sub 'DARPAN_${DeployEnv}_ACCOUNT', Value: !Ref AWS::AccountId }
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          env:
+            shell: bash
+          phases:
+            build:
+              commands:
+                - set -euo pipefail
+                - test -n "$DEPLOY_ARGS" || { echo "DEPLOY_ARGS is required, e.g. --ref v0.0.4 | --tag <tag> | --restart"; exit 2; }
+                - git clone --quiet "$SOURCE_REPO_URL" src && git -C src checkout --quiet "$SCRIPTS_REF"
+                - export DARPAN_UAT_ACCOUNT="${DARPAN_uat_ACCOUNT:-}" DARPAN_PROD_ACCOUNT="${DARPAN_prod_ACCOUNT:-}"
+                - echo "deploy.sh $DEPLOY_ENV $DEPLOY_ARGS --yes  (scripts at $(git -C src rev-parse --short HEAD))"
+                - src/aws/deploy.sh "$DEPLOY_ENV" $DEPLOY_ARGS --yes
+
+Outputs:
+  ProjectName:
+    Value: !Ref Deployer
+  LogGroupName:
+    Value: !Ref DeployLogGroup
