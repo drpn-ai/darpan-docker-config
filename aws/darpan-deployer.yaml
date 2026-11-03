@@ -82,22 +82,39 @@ Resources:
                 Effect: Allow
                 Action: [cloudformation:DescribeEvents, cloudformation:DescribeStackEvents]
                 Resource: '*'
-              - Sid: EcsDeploy
+              # RegisterTaskDefinition / DescribeTaskDefinition support no resource scoping; everything else is pinned to
+              # the app stack's own cluster, service and task-definition family (CloudFormation-generated names).
+              - Sid: EcsTaskDefinitions
                 Effect: Allow
-                Action:
-                  - ecs:RegisterTaskDefinition
-                  - ecs:DeregisterTaskDefinition
-                  - ecs:DescribeTaskDefinition
-                  - ecs:DescribeServices
-                  - ecs:UpdateService
-                  - ecs:ListTasks
-                  - ecs:DescribeTasks
-                  - ecs:TagResource
+                Action: [ecs:RegisterTaskDefinition, ecs:DescribeTaskDefinition]
                 Resource: '*'
+              - Sid: EcsAppService
+                Effect: Allow
+                Action: [ecs:DescribeServices, ecs:UpdateService, ecs:TagResource]
+                Resource:
+                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${AppStackName}-Cluster-*/${AppStackName}-Service-*'
+                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-darpan:*'
+              - Sid: EcsAppFamily
+                Effect: Allow
+                Action: ecs:DeregisterTaskDefinition
+                Resource: '*'
+                Condition:
+                  StringLike: { 'ecs:task-definition': !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-darpan:*' }
+              - Sid: EcsAppTasks
+                Effect: Allow
+                Action: [ecs:ListTasks, ecs:DescribeTasks]
+                Resource:
+                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:container-instance/${AppStackName}-Cluster-*/*'
+                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/${AppStackName}-Cluster-*/*'
+                  - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${AppStackName}-Cluster-*'
+              # Only the app's two task roles: a bare '${AppStackName}-*' would also match this deployer's role and the
+              # image builder's (darpan-prod-deployer-*, darpan-prod-build-*).
               - Sid: PassTaskRoles
                 Effect: Allow
                 Action: iam:PassRole
-                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-TaskExecutionRole-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-TaskRole-*'
                 Condition:
                   StringEquals: { 'iam:PassedToService': ecs-tasks.amazonaws.com }
               - Sid: TaskAlarms
@@ -112,7 +129,9 @@ Resources:
                   - ec2:UpdateSecurityGroupRuleDescriptionsIngress
                 Resource: !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*'
                 Condition:
-                  StringEquals: { 'aws:ResourceTag/aws:cloudformation:stack-name': !Ref AppStackName }
+                  StringEquals:
+                    'aws:ResourceTag/aws:cloudformation:stack-name': !Ref AppStackName
+                    'aws:ResourceTag/aws:cloudformation:logical-id': AlbSecurityGroup
               - Sid: Reads
                 Effect: Allow
                 Action:
