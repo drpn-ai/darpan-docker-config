@@ -209,7 +209,26 @@ RUN git apply --check /tmp/buildGradle.patch 2>/dev/null \
 # Create WAR file. Build the moqui-gql engine jar FIRST: it contributes a GqlToolFactory loaded at
 # ECF init and vendors graphql-java into its lib/; nothing depends on it in the build graph, so
 # addRuntime alone would not build it and the server would fail to load the component at startup.
-RUN ./gradlew :runtime:component:moqui-gql:jar addRuntime
+#
+# Dependencies come through a BuildKit cache kept by prod builds on the host (DAR-OPS-011): Maven
+# Central blocks an IP that re-downloads the whole graph on each build (429). The image keeps its own
+# complete GRADLE_USER_HOME, since the entrypoint's upgrade-data load runs gradlew at start, so the cache
+# only seeds it and is refreshed from it. gradle-cache-prune.init.gradle (this step only) drops seeded
+# files unused for a day, so old versions do not pile up in the image; --no-daemon lets that cleanup
+# finish before the copy-back. An empty cache (CodeBuild, a first build, --no-cache) works as before.
+# Its own cache id: a UAT build of unreviewed code must not be able to plant an artifact a prod build trusts.
+COPY docker/gradle-cache-prune.init.gradle /tmp/gradle-cache-prune.init.gradle
+RUN --mount=type=cache,id=darpan-gradle-prod,target=/gradle-cache,sharing=locked \
+    set -e; \
+    mkdir -p "$GRADLE_USER_HOME/caches" "$GRADLE_USER_HOME/init.d"; \
+    if [ -d /gradle-cache/modules-2 ] && [ -d /gradle-cache/journal-1 ]; then \
+        cp -a /gradle-cache/modules-2 /gradle-cache/journal-1 "$GRADLE_USER_HOME/caches/"; \
+    fi; \
+    mv /tmp/gradle-cache-prune.init.gradle "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
+    ./gradlew --no-daemon :runtime:component:moqui-gql:jar addRuntime; \
+    rm -f "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
+    rm -rf /gradle-cache/modules-2 /gradle-cache/journal-1; \
+    cp -a "$GRADLE_USER_HOME/caches/modules-2" "$GRADLE_USER_HOME/caches/journal-1" /gradle-cache/
 
 # Extract WAR file.
 WORKDIR /moqui-deploy
