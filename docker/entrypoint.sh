@@ -35,6 +35,12 @@ sed -i 's|name="entity_ds_password" value="moqui"|name="entity_ds_password" valu
 sed -i 's|name="entity_ds_database" value="moqui"|name="entity_ds_database" value="'"$Moqui_DB_NAME"'"|g' "$CONF_FILE"
 
 WEBAPP_ALLOW_ORIGINS_OVERRIDE="${Moqui_WEBAPP_ALLOW_ORIGINS:-${WEBAPP_ALLOW_ORIGINS:-}}"
+# DAR-OPS-001: never a wildcard. Moqui would echo any Origin with credentials, so any website could ride a session.
+ORIGINS_NO_WILDCARD=$(printf '%s' "$WEBAPP_ALLOW_ORIGINS_OVERRIDE" | tr ',' '\n' | grep -vx '[[:space:]]*\*[[:space:]]*' | paste -sd, -)
+if [ "$ORIGINS_NO_WILDCARD" != "$WEBAPP_ALLOW_ORIGINS_OVERRIDE" ]; then
+  echo "WARNING: dropping '*' from the allowed origins (DAR-OPS-001); list the app origins explicitly." >&2
+  WEBAPP_ALLOW_ORIGINS_OVERRIDE="$ORIGINS_NO_WILDCARD"
+fi
 if [ -n "$WEBAPP_ALLOW_ORIGINS_OVERRIDE" ]; then
   sed -i 's|name="webapp_allow_origins" value="[^"]*"|name="webapp_allow_origins" value="'"$WEBAPP_ALLOW_ORIGINS_OVERRIDE"'"|g' "$CONF_FILE"
 fi

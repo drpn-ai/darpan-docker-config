@@ -201,12 +201,10 @@ ENV Moqui_DB_HOST=
 ENV Moqui_DB_USER=
 ENV Moqui_DB_PASSWORD=
 ENV Moqui_DB_NAME=
-# TEMPORARY 2026-07-02: '*' appended so any origin passes the Moqui allowlist while the UAT ingress
-# CORS rewrite is investigated. REVERT once the ingress stops stamping Access-Control-Allow-Origin: *.
-# Note the wildcard alone does NOT fix credentialed (cookie-auth) browser requests — browsers reject
-# ACAO '*' with credentials regardless of what the backend allows; the ingress header is the blocker.
-# This Dockerfile builds the UAT-track image (DARPAN_REF=main); prod/Dockerfile stays strict.
-ENV Moqui_WEBAPP_ALLOW_ORIGINS="*,darpan-app-uat.hotwax.io,darpan-app.hotwax.io,darpan-uat.hotwax.io,darpan.hotwax.io,hotwax-darpan-dev.web.app,hotwax-darpan-dev.firebaseapp.com,hc-darpan-uat.web.app,hc-darpan-uat.firebaseapp.com,hc-darpan.web.app,hc-darpan.firebaseapp.com,app-uat.drpn.ai,app.drpn.ai"
+# DAR-OPS-001: an explicit list, no '*'. The 2026-07-02 wildcard was for the old HotWax UAT ingress, which stamped
+# Access-Control-Allow-Origin: *; UAT now runs behind Darpan's own AWS load balancer, which does not. With '*' Moqui echoes
+# any Origin with credentials, so any website could ride a UAT session. The entrypoint drops a '*' entry too.
+ENV Moqui_WEBAPP_ALLOW_ORIGINS="darpan-app-uat.hotwax.io,darpan-app.hotwax.io,darpan-uat.hotwax.io,darpan.hotwax.io,hotwax-darpan-dev.web.app,hotwax-darpan-dev.firebaseapp.com,hc-darpan-uat.web.app,hc-darpan-uat.firebaseapp.com,hc-darpan.web.app,hc-darpan.firebaseapp.com,app-uat.drpn.ai,app.drpn.ai"
 ENV WEBAPP_ALLOW_ORIGINS=
 ENV ELASTICSEARCH_HOST=
 ENV TIME_ZONE=
