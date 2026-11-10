@@ -1,0 +1,22 @@
+// Optional Gradle init script for aws/deploy.sh --maven-mirror (DAR-OPS-006).
+//
+// Maven Central (repo.maven.apache.org, behind Cloudflare) sometimes answers 429 Too Many Requests to a
+// build host's IP, and the Gradle Plugin Portal redirects plugin downloads there too. This points both at
+// Google's mirror of Maven Central, which serves the same artifacts. deploy.sh copies it into the image's
+// GRADLE_USER_HOME/init.d only when asked; the Dockerfiles themselves never reference it.
+def MIRROR = 'https://maven-central.storage-download.googleapis.com/maven2/'
+
+def redirect = { repos ->
+    repos.configureEach { r ->
+        if (r instanceof MavenArtifactRepository && r.url.toString().contains('repo.maven.apache.org')) r.url = MIRROR
+    }
+}
+
+beforeSettings { s ->
+    s.pluginManagement.repositories { maven { url = MIRROR }; gradlePluginPortal() }
+}
+
+allprojects { p ->
+    redirect(p.repositories)
+    redirect(p.buildscript.repositories)
+}

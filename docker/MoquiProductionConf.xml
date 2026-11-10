@@ -46,6 +46,14 @@
         </webapp>
     </webapp-list>
 
+    <!-- DAR-BE-159: embedded agent master switch (off by default; a tenant also needs agentEnabled=Y). The Anthropic key
+         is read from the ANTHROPIC_API_KEY env var by AgentClientFactory and must never go in this file. Elvis, not
+         shell ${var:-default} syntax: see the crypt-key note below. -->
+    <default-property name="darpan.agent.enabled" value="${DARPAN_AGENT_ENABLED ?: 'false'}"/>
+    <!-- DAR-BE-159: server-side model fallbacks on each agent request (AgentRoleLoop.FALLBACKS_PROPERTY); set
+         DARPAN_AGENT_FALLBACKS=false to stop sending them, e.g. if the API refuses the beta. -->
+    <default-property name="darpan.agent.fallbacks" value="${DARPAN_AGENT_FALLBACKS ?: 'true'}"/>
+
     <!-- JWT_KEY: deployment-unique signing secret for any Darpan JWT-based flows (wired from the
          JWT_KEY env var, which is enforced non-empty by the container entrypoint).
          Accessible at runtime via ec.factory.getProperty('jwt_signing_key') or ${jwt_signing_key}. -->

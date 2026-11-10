@@ -1,0 +1,13 @@
+// Image-build-only Gradle init script (DAR-OPS-011). The Dockerfiles copy it into GRADLE_USER_HOME/init.d
+// for the one Gradle build step and delete it afterwards, so the running container never sees it.
+//
+// That build step seeds the image's GRADLE_USER_HOME from a BuildKit cache shared by earlier builds, so
+// Maven Central is asked only for what changed (it blocks an IP that re-downloads everything: 429). The
+// seed also carries versions this build no longer uses; cleanup after this build deletes every downloaded
+// file not used within the last day, so the image keeps what it needs and not every version ever cached.
+beforeSettings { settings ->
+    settings.caches {
+        cleanup.set(Cleanup.ALWAYS)
+        downloadedResources.removeUnusedEntriesAfterDays = 1
+    }
+}

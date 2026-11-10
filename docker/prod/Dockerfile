@@ -67,8 +67,8 @@ ARG MOQUI_RUNTIME_REF=v3.9.9
 # moqui-atomikos retired: Moqui 4 embeds Bitronix as the default JTA TM; no separate Atomikos component needed.
 ARG MOQUI_SFTP_REF=v1.0.3
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# TESTING VARIANT — tag v0.0.4 (supersedes v0.0.3). All six drpn-ai product components (darpan,
-# darpan-hotwax, shopify-darpan, netsuite-darpan, database-darpan, moqui-gql) track `main` instead
+# TESTING VARIANT — tag v0.0.5 (supersedes v0.0.4). All seven drpn-ai product components (darpan,
+# darpan-hotwax, shopify-darpan, netsuite-darpan, database-darpan, moqui-gql, darpan-agent) track `main` instead
 # of release tags, so a prod-shaped image can be built from unreleased code. Everything else is the
 # production build unchanged: the same hardened base image, prod entrypoint, JSON logging, and the
 # prod CORS allowlist (which, unlike docker/Dockerfile, does NOT carry the `*` wildcard).
@@ -94,8 +94,8 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs. Released prod pins these refs to tags: darpan v2.1.12, darpan-hotwax v0.10.4,
-# shopify-darpan v0.8.5, netsuite-darpan v0.4.3, database-darpan v0.2.2, moqui-gql v0.1.1 as of this
-# branch point (v0.0.4).
+# shopify-darpan v0.8.5, netsuite-darpan v0.4.3, database-darpan v0.2.2, moqui-gql v0.1.1 (darpan-agent:
+# none released yet; v0.1.0 planned) as of this branch point (v0.0.5).
 ARG DARPAN_REF=main
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
@@ -139,6 +139,11 @@ ARG DATABASE_DARPAN_REF=main
 # moqui-gql v0.1.0 (first tag, with darpan v2.1.0): darpan 2.1's audit report, finding and findings roots
 # need it, and the report it serves has no extendedThru. Moves with DARPAN_REF.
 ARG MOQUI_GQL_REF=main
+# darpan-agent (DAR-BE-159): the embedded Claude agent. Off unless DARPAN_AGENT_ENABLED=true AND a tenant has
+# agentEnabled=Y; it reads ANTHROPIC_API_KEY from the container env at run time (never baked into the image). Like
+# moqui-gql it compileOnly-depends on darpan, so it is built by its own jar task below. Tracks main here (v0.0.5);
+# main's release recipe pins it to v0.1.0, cut with the darpan release that carries DAR-BE-159.
+ARG DARPAN_AGENT_REF=main
 
 WORKDIR /
 
@@ -161,6 +166,7 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
     git clone --depth 1 -b "$SHOPIFY_DARPAN_REF"  https://github.com/drpn-ai/shopify-darpan.git /moqui-framework/runtime/component/shopify-darpan; \
     git clone --depth 1 -b "$NETSUITE_DARPAN_REF" https://github.com/drpn-ai/netsuite-darpan.git /moqui-framework/runtime/component/netsuite-darpan; \
     git clone --depth 1 -b "$DATABASE_DARPAN_REF" https://github.com/drpn-ai/database-darpan.git /moqui-framework/runtime/component/database-darpan; \
+    git clone --depth 1 -b "$DARPAN_AGENT_REF"    https://github.com/drpn-ai/darpan-agent.git   /moqui-framework/runtime/component/darpan-agent; \
     git clone --depth 1 -b "$MOQUI_GQL_REF"       https://github.com/drpn-ai/moqui-gql.git      /moqui-framework/runtime/component/moqui-gql; \
     rm -f /root/.netrc
 
@@ -209,7 +215,26 @@ RUN git apply --check /tmp/buildGradle.patch 2>/dev/null \
 # Create WAR file. Build the moqui-gql engine jar FIRST: it contributes a GqlToolFactory loaded at
 # ECF init and vendors graphql-java into its lib/; nothing depends on it in the build graph, so
 # addRuntime alone would not build it and the server would fail to load the component at startup.
-RUN ./gradlew :runtime:component:moqui-gql:jar addRuntime
+#
+# Dependencies come through a BuildKit cache kept by prod builds on the host (DAR-OPS-011): Maven
+# Central blocks an IP that re-downloads the whole graph on each build (429). The image keeps its own
+# complete GRADLE_USER_HOME, since the entrypoint's upgrade-data load runs gradlew at start, so the cache
+# only seeds it and is refreshed from it. gradle-cache-prune.init.gradle (this step only) drops seeded
+# files unused for a day, so old versions do not pile up in the image; --no-daemon lets that cleanup
+# finish before the copy-back. An empty cache (CodeBuild, a first build, --no-cache) works as before.
+# Its own cache id: a UAT build of unreviewed code must not be able to plant an artifact a prod build trusts.
+COPY docker/gradle-cache-prune.init.gradle /tmp/gradle-cache-prune.init.gradle
+RUN --mount=type=cache,id=darpan-gradle-prod,target=/gradle-cache,sharing=locked \
+    set -e; \
+    mkdir -p "$GRADLE_USER_HOME/caches" "$GRADLE_USER_HOME/init.d"; \
+    if [ -d /gradle-cache/modules-2 ] && [ -d /gradle-cache/journal-1 ]; then \
+        cp -a /gradle-cache/modules-2 /gradle-cache/journal-1 "$GRADLE_USER_HOME/caches/"; \
+    fi; \
+    mv /tmp/gradle-cache-prune.init.gradle "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
+    ./gradlew --no-daemon :runtime:component:moqui-gql:jar :runtime:component:darpan-agent:jar addRuntime; \
+    rm -f "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
+    rm -rf /gradle-cache/modules-2 /gradle-cache/journal-1; \
+    cp -a "$GRADLE_USER_HOME/caches/modules-2" "$GRADLE_USER_HOME/caches/journal-1" /gradle-cache/
 
 # Extract WAR file.
 WORKDIR /moqui-deploy

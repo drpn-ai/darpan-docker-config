@@ -12,7 +12,7 @@
 #    during the rollout window; once CI is on `--secret id=netrc,...` they can be dropped.
 #  - W5 #38: Moqui framework / runtime / sftp refs are pinned in-file to stable immutable refs
 #    matching the dev baseline (see the ARG block); no build-arg override is required. Product
-#    components (darpan / darpan-hotwax / shopify-darpan / netsuite-darpan / database-darpan) default
+#    components (darpan / darpan-hotwax / shopify-darpan / netsuite-darpan / database-darpan / darpan-agent) default
 #    to `main` on this UAT-track image by design; `prod/Dockerfile` pins them to release tags.
 ARG BASE_IMAGE=public.ecr.aws/j6s7y7u4/hotwax/ubuntu:22.04
 
@@ -76,6 +76,10 @@ ARG DARPAN_HOTWAX_REF=main
 ARG SHOPIFY_DARPAN_REF=main
 ARG NETSUITE_DARPAN_REF=main
 ARG DATABASE_DARPAN_REF=main
+# darpan-agent (DAR-BE-159): the embedded Claude agent. Off unless DARPAN_AGENT_ENABLED=true AND a tenant has
+# agentEnabled=Y; it reads ANTHROPIC_API_KEY from the container env at run time (never baked into the image). Like
+# moqui-gql it compileOnly-depends on darpan, so it is built by its own jar task below.
+ARG DARPAN_AGENT_REF=main
 ARG MOQUI_GQL_REF=main
 
 WORKDIR /
@@ -101,6 +105,7 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
     git clone --depth 1 -b "$SHOPIFY_DARPAN_REF"  https://github.com/drpn-ai/shopify-darpan.git /moqui-framework/runtime/component/shopify-darpan; \
     git clone --depth 1 -b "$NETSUITE_DARPAN_REF" https://github.com/drpn-ai/netsuite-darpan.git /moqui-framework/runtime/component/netsuite-darpan; \
     git clone --depth 1 -b "$DATABASE_DARPAN_REF" https://github.com/drpn-ai/database-darpan.git /moqui-framework/runtime/component/database-darpan; \
+    git clone --depth 1 -b "$DARPAN_AGENT_REF"    https://github.com/drpn-ai/darpan-agent.git   /moqui-framework/runtime/component/darpan-agent; \
     git clone --depth 1 -b "$MOQUI_GQL_REF"       https://github.com/drpn-ai/moqui-gql.git      /moqui-framework/runtime/component/moqui-gql; \
     rm -f /root/.netrc
 
@@ -150,7 +155,25 @@ RUN git apply --check /tmp/buildGradle.patch 2>/dev/null \
 # ECF init and vendors graphql-java into its lib/. Nothing depends on it in the build graph (it
 # compileOnly-depends on darpan, not vice-versa), so addRuntime alone would not build it and the
 # server would fail to load the component at startup.
-RUN ./gradlew :runtime:component:moqui-gql:jar addRuntime
+#
+# Dependencies come through a BuildKit cache kept by UAT builds on the host (DAR-OPS-011): Maven
+# Central blocks an IP that re-downloads the whole graph on each build (429). The image keeps its own
+# complete GRADLE_USER_HOME, since the entrypoint's upgrade-data load runs gradlew at start, so the cache
+# only seeds it and is refreshed from it. gradle-cache-prune.init.gradle (this step only) drops seeded
+# files unused for a day, so old versions do not pile up in the image; --no-daemon lets that cleanup
+# finish before the copy-back. An empty cache (CodeBuild, a first build, --no-cache) works as before.
+COPY docker/gradle-cache-prune.init.gradle /tmp/gradle-cache-prune.init.gradle
+RUN --mount=type=cache,id=darpan-gradle,target=/gradle-cache,sharing=locked \
+    set -e; \
+    mkdir -p "$GRADLE_USER_HOME/caches" "$GRADLE_USER_HOME/init.d"; \
+    if [ -d /gradle-cache/modules-2 ] && [ -d /gradle-cache/journal-1 ]; then \
+        cp -a /gradle-cache/modules-2 /gradle-cache/journal-1 "$GRADLE_USER_HOME/caches/"; \
+    fi; \
+    mv /tmp/gradle-cache-prune.init.gradle "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
+    ./gradlew --no-daemon :runtime:component:moqui-gql:jar :runtime:component:darpan-agent:jar addRuntime; \
+    rm -f "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
+    rm -rf /gradle-cache/modules-2 /gradle-cache/journal-1; \
+    cp -a "$GRADLE_USER_HOME/caches/modules-2" "$GRADLE_USER_HOME/caches/journal-1" /gradle-cache/
 
 #Extract war file.
 WORKDIR /moqui-deploy
