@@ -83,6 +83,13 @@ Parameters:
     Description: >-
       Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (includes app.drpn.ai). Set
       it during the rehearsal only, e.g. to add a local darpan-ui origin.
+  AppBaseUrl:
+    Type: String
+    Default: https://app.drpn.ai
+    AllowedPattern: '^https://[^/\s]+$'
+    Description: >-
+      DARPAN_APP_BASE_URL: the app origin that audit run emails, chat cards and CLI sign-in links point at. The code has
+      no default (a missing value drops the link), so prod must carry it (DAR-BE-207).
   TimeZone:
     Type: String
     Default: UTC
@@ -588,6 +595,7 @@ Resources:
             - { Name: TIME_ZONE, Value: !Ref TimeZone }
             - { Name: DARPAN_LOAD_UPGRADE_DATA, Value: 'Y' }
             - { Name: DARPAN_UPGRADE_DATA_TYPES, Value: !Ref UpgradeDataTypes }
+            - { Name: DARPAN_APP_BASE_URL, Value: !Ref AppBaseUrl }
             # Moqui reads an env var named like a default-property in place of the conf value; 0 = no scheduler.
             - !If
               - SchedulerOff
