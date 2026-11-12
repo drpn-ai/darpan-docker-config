@@ -658,6 +658,21 @@ Resources:
                   - ssmmessages:OpenControlChannel
                   - ssmmessages:OpenDataChannel
                 Resource: '*'
+        # Workload identity federation to Anthropic: the task mints short-lived AWS-signed JWTs for the Claude API
+        # (darpan-agent) instead of holding an Anthropic API key. Only that audience, at most one hour; the
+        # account has outbound web identity federation enabled, and Anthropic's federation rule matches this role.
+        - PolicyName: anthropic-workload-identity
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: MintAnthropicIdentityToken
+                Effect: Allow
+                Action: sts:GetWebIdentityToken
+                Resource: '*'
+                Condition:
+                  'ForAllValues:StringEquals': { 'sts:IdentityTokenAudience': 'https://api.anthropic.com' }
+                  'Null': { 'sts:IdentityTokenAudience': 'false' }
+                  NumericLessThanEquals: { 'sts:DurationSeconds': 3600 }
 
   # ---------- Logs ----------
   LogGroup:
