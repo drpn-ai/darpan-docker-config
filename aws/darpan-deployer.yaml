@@ -81,6 +81,16 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppStackName}/*'
                   - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:changeSet/deploy-*/*'
+              # A stack lets anyone who may operate on it use its stored service role without iam:PassRole. After
+              # an admin applies a template change as InfraChangeRole, that role stays stored until the next
+              # deploy, so the deployer must never plan a change without naming StackUpdateRole (a missing
+              # RoleArn also matches ArnNotEquals, so a role-less change set is refused too).
+              - Sid: OnlyAsStackUpdateRole
+                Effect: Deny
+                Action: [cloudformation:CreateChangeSet, cloudformation:CreateStack, cloudformation:UpdateStack]
+                Resource: '*'
+                Condition:
+                  ArnNotEquals: { 'cloudformation:RoleArn': !GetAtt StackUpdateRole.Arn }
               - Sid: StackEvents
                 Effect: Allow
                 Action: [cloudformation:DescribeEvents, cloudformation:DescribeStackEvents]
@@ -237,7 +247,8 @@ Resources:
         must:
           - assumable only by cloudformation in this account
           - never passable by DeployRole or any automation
-          - IAM writes stay limited to ${AppStackName}-* roles and instance profiles
+          - IAM writes stay limited to ${AppStackName}-* roles and instance profiles, never this stack's own roles
+          - DeployRole keeps its OnlyAsStackUpdateRole deny (otherwise the deployer inherits this role while stored)
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -281,13 +292,10 @@ Resources:
                   - iam:CreateRole
                   - iam:DeleteRole
                   - iam:GetRole
-                  - iam:PassRole
                   - iam:TagRole
                   - iam:UntagRole
                   - iam:UpdateRole
                   - iam:UpdateAssumeRolePolicy
-                  - iam:AttachRolePolicy
-                  - iam:DetachRolePolicy
                   - iam:PutRolePolicy
                   - iam:GetRolePolicy
                   - iam:DeleteRolePolicy
@@ -303,6 +311,29 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/${AppStackName}-*'
+              - Sid: AppStackRolesManagedPolicies
+                Effect: Allow
+                Action: [iam:AttachRolePolicy, iam:DetachRolePolicy]
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
+                Condition:
+                  ArnEquals:
+                    'iam:PolicyARN':
+                      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+                      - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+              - Sid: PassAppStackRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
+                Condition:
+                  StringEquals:
+                    'iam:PassedToService': [ecs-tasks.amazonaws.com, ec2.amazonaws.com]
+              # ${AppStackName}-* also matches this deployer stack's own roles (darpan-prod-deployer-*).
+              - Sid: NeverTheDeployerRoles
+                Effect: Deny
+                Action: 'iam:*'
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/${AWS::StackName}-*'
               - Sid: ServiceLinkedRoles
                 Effect: Allow
                 Action: iam:CreateServiceLinkedRole
