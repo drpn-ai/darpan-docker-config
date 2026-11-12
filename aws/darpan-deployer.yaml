@@ -221,6 +221,112 @@ Resources:
                 Action: [ecr:DescribeRepositories]
                 Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
 
+  InfraChangeRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          CloudFormation's service role for reviewed TEMPLATE changes to the app stack (DAR-OPS-016 onward). A stack
+          keeps the last service role it was given and can swap it but never drop it, so once deploys associated
+          StackUpdateRole, a template change that adds resources outside a deploy's scope (the NAT instance, Elastic
+          IP, routes, an IAM role) needs a broader role. Only the admin who reviews the change set passes this one
+          (create-change-set --role-arn); DeployRole cannot (its PassRole is StackUpdateRole only), so unattended
+          deploys stay least-privilege. Covers the services darpan-prod.yaml uses; IAM writes only on the app
+          stack's own roles and instance profiles. After it applies a change, the next deployer run hands the stack
+          back to StackUpdateRole.
+        must:
+          - assumable only by cloudformation in this account
+          - never passable by DeployRole or any automation
+          - IAM writes stay limited to ${AppStackName}-* roles and instance profiles
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: change-app-stack-template
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AppStackServices
+                Effect: Allow
+                Action:
+                  - ec2:*
+                  - ecs:*
+                  - elasticloadbalancing:*
+                  - rds:*
+                  - elasticfilesystem:*
+                  - ecr:*
+                  - logs:*
+                  - cloudwatch:*
+                  - sns:*
+                  - budgets:*
+                  - acm:DescribeCertificate
+                  - secretsmanager:GetRandomPassword
+                Resource: '*'
+              - Sid: AppStackSecrets
+                Effect: Allow
+                Action: secretsmanager:*
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:CryptPassSecret-*'
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:JwtKeySecret-*'
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:DbMasterSecret-*'
+              - Sid: AppStackRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:TagInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/${AppStackName}-*'
+              - Sid: ServiceLinkedRoles
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/*'
+                Condition:
+                  StringEquals:
+                    'iam:AWSServiceName':
+                      - events.amazonaws.com
+                      - ecs.amazonaws.com
+                      - elasticloadbalancing.amazonaws.com
+                      - rds.amazonaws.com
+                      - elasticfilesystem.amazonaws.com
+              - Sid: EncryptedVolumesAndSecrets
+                Effect: Allow
+                Action: [kms:CreateGrant, kms:Decrypt, kms:DescribeKey, 'kms:GenerateDataKey*', 'kms:ReEncrypt*']
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'kms:ViaService':
+                      - !Sub 'ec2.${AWS::Region}.amazonaws.com'
+                      - !Sub 'rds.${AWS::Region}.amazonaws.com'
+                      - !Sub 'elasticfilesystem.${AWS::Region}.amazonaws.com'
+                      - !Sub 'secretsmanager.${AWS::Region}.amazonaws.com'
+
   Deployer:
     Type: AWS::CodeBuild::Project
     Metadata:
@@ -274,3 +380,6 @@ Outputs:
     Value: !Ref Deployer
   LogGroupName:
     Value: !Ref DeployLogGroup
+  InfraChangeRoleArn:
+    Description: Pass as --role-arn on a reviewed template change set for the app stack (never from automation)
+    Value: !GetAtt InfraChangeRole.Arn

@@ -2,14 +2,17 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Darpan production on Darpan's own AWS project (DAR-OPS-006): one Moqui backend on ECS Fargate ARM64 behind an
   HTTPS ALB, single-AZ RDS MySQL 8.4, EFS for runtime/datamanager run files. Derived from darpan-uat.yaml and kept
-  deliberately small: no NAT, no OpenSearch, no WAF, no Multi-AZ. Configuration arrives by the admin app's config
-  transfer (credentials sealed to this instance), not by a database dump, so run history is regenerated here.
+  deliberately small: a NAT instance (not a NAT Gateway) for one fixed outbound IP, no OpenSearch, no WAF, no
+  Multi-AZ. Configuration arrives by the admin app's config transfer (credentials sealed to this instance), not by a
+  database dump, so run history is regenerated here.
 
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: ALB(443, AllowedCidr) -> Fargate task :8080 (public subnet, no NAT) -> RDS (private) + EFS (private)
+    arch: >-
+      ALB(443, AllowedCidr) -> Fargate task :8080 (private subnet, egress via NAT instance + Elastic IP) -> RDS
+      (private) + EFS (private)
     must:
       - DesiredCount <= 1 (in-process Moqui scheduler; 2 tasks double-run automations)
       - SchedulerEnabled stays false until cutover, so a rehearsal never runs a tenant's automations
@@ -99,6 +102,17 @@ Parameters:
   MonthlyBudgetUsd:
     Type: Number
     Default: 175
+  NatAmiId:
+    Type: AWS::EC2::Image::Id
+    Description: >-
+      Amazon Linux 2023 arm64 AMI for the NAT instance, pinned on purpose (read the current one from
+      /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64). Not an SSM-path parameter: that
+      re-resolves on every update, so an AWS AMI release would replace the NAT inside an image deploy.
+  NatInstanceType:
+    Type: String
+    Default: t4g.nano
+    AllowedValues: [t4g.nano, t4g.micro, t4g.small]
+    Description: t4g.nano to start; t4g.micro if large extract downloads drain its network burst.
 
 Conditions:
   SchedulerOff: !Equals [!Ref SchedulerEnabled, 'false']
@@ -184,7 +198,182 @@ Resources:
       SubnetId: !Ref PublicSubnetB
       RouteTableId: !Ref PublicRouteTable
 
-  # Private subnets keep the VPC's implicit main route table: local traffic only, no internet.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          the task sits in the private subnets and leaves through the NAT instance, so every outbound call shows
+          one fixed Elastic IP that partners can allowlist (DAR-OPS-016). RDS and EFS share these subnets but never
+          start outbound connections, and the NAT admits only the task's security group
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-private' }]
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NatEipAssociation
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: waits for the Elastic IP so the first packet through the NAT already carries the allowlisted address
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NatInstance
+
+  PrivateSubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: free; ECR image layers download from S3, so deploys' image pulls skip the NAT instance
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRouteTable]
+
+  # ---------- NAT instance (fixed outbound IP) ----------
+  NatSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: NAT instance - forwards traffic from the Darpan task only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: '-1'
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: Darpan task egress to forward
+
+  NatRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Session Manager access (no SSH port, no key pair), plus SignalResource on this stack only, because
+          cfn-signal signs with the instance role when one is attached and an unauthorised signal stalls the update
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: signal-nat-ready
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:SignalResource
+                Resource: !Ref AWS::StackId
+
+  NatInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref NatRole]
+
+  NatInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: GatewayAttachment
+    CreationPolicy:
+      ResourceSignal: { Count: 1, Timeout: PT15M }
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          a NAT instance instead of a NAT Gateway (~$4-7/mo vs ~$33/mo + $0.045/GB). Boots with a temporary public
+          IP so it can install packages, signals only once forwarding works, then the Elastic IP replaces that IP.
+          The forwarding rules live in a systemd unit so they come back after every reboot and auto-recovery
+        must:
+          - SourceDestCheck false (a NAT forwards traffic that is neither from nor to itself)
+          - a single point of failure for ALL task egress (partner APIs, CloudWatch logs, Secrets Manager, ECR auth)
+          - ImageId changes replace it; the Elastic IP moves, but egress drops for the minutes that takes
+    Properties:
+      ImageId: !Ref NatAmiId
+      InstanceType: !Ref NatInstanceType
+      IamInstanceProfile: !Ref NatInstanceProfile
+      SourceDestCheck: false
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref PublicSubnetA
+          GroupSet: [!Ref NatSecurityGroup]
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 8, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-nat' }]
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euo pipefail
+            signal() { /opt/aws/bin/cfn-signal -e "$1" --stack ${AWS::StackName} --resource NatInstance --region ${AWS::Region} || true; }
+            trap 'signal 1' ERR
+            dnf -y install iptables-nft aws-cfn-bootstrap dnf-automatic
+            cat > /usr/local/sbin/darpan-nat <<'EOF'
+            #!/bin/bash
+            set -euo pipefail
+            sysctl -q -w net.ipv4.ip_forward=1
+            sysctl -q -w net.ipv4.conf.all.send_redirects=0
+            IF=$(ip -o -4 route show to default | awk '{print $5; exit}')
+            iptables -t nat -C POSTROUTING -o "$IF" -s ${VpcCidr} -j MASQUERADE 2>/dev/null \
+              || iptables -t nat -A POSTROUTING -o "$IF" -s ${VpcCidr} -j MASQUERADE
+            EOF
+            chmod 0755 /usr/local/sbin/darpan-nat
+            cat > /etc/systemd/system/darpan-nat.service <<'EOF'
+            [Unit]
+            Description=Darpan NAT (IP forwarding + masquerade)
+            After=network-online.target
+            Wants=network-online.target
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/usr/local/sbin/darpan-nat
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            systemctl daemon-reload
+            systemctl enable --now darpan-nat.service
+            # security updates are wanted but not worth failing the NAT over
+            { sed -i 's/^upgrade_type.*/upgrade_type = security/; s/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf \
+              && systemctl enable --now dnf-automatic.timer; } || echo "dnf-automatic not enabled" >&2
+            iptables -t nat -S POSTROUTING | grep -q MASQUERADE
+            signal 0
+          - VpcCidr: !GetAtt Vpc.CidrBlock
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: the address partners allowlist; it outlives the NAT instance, a NAT Gateway swap, and even the stack
+        must: [never release or replace once a partner has allowlisted it]
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-egress' }]
+
+  NatEipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      InstanceId: !Ref NatInstance
 
   # ---------- Security groups ----------
   AlbSecurityGroup:
@@ -619,7 +808,7 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
-    DependsOn: [HttpsListener, MountTargetA, MountTargetB]
+    DependsOn: [HttpsListener, MountTargetA, MountTargetB, PrivateDefaultRoute, PrivateSubnetARoutes, PrivateSubnetBRoutes, S3GatewayEndpoint]
     Metadata:
       com.aws.cloudformation.Context:
         why: >-
@@ -639,8 +828,8 @@ Resources:
         DeploymentCircuitBreaker: { Enable: true, Rollback: true }
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
-          Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+          AssignPublicIp: DISABLED
+          Subnets: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
           SecurityGroups: [!Ref AppSecurityGroup]
       LoadBalancers:
         - ContainerName: darpan
@@ -740,6 +929,45 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [!Ref AlertTopic]
 
+  NatInstanceCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          an OS-level hang on the NAT cuts all task egress; reboot it and say so. Hardware (system check) failures
+          are handled by EC2 simplified auto-recovery, which keeps the instance id and the Elastic IP
+    Properties:
+      AlarmDescription: Darpan NAT instance failed its instance status check for 3 minutes (rebooting it); task egress is down
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_Instance
+      Dimensions:
+        - { Name: InstanceId, Value: !Ref NatInstance }
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic, !Sub 'arn:aws:automate:${AWS::Region}:ec2:reboot']
+      OKActions: [!Ref AlertTopic]
+
+  NatSystemCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Darpan NAT instance failed its system status check (EC2 auto-recovery should move it); task egress is down
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions:
+        - { Name: InstanceId, Value: !Ref NatInstance }
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
   # ---------- Cost guard ----------
   MonthlyBudget:
     Type: AWS::Budgets::Budget
@@ -773,3 +1001,6 @@ Outputs:
     Value: !GetAtt Database.Endpoint.Address
   AlertTopicArn:
     Value: !Ref AlertTopic
+  NatPublicIp:
+    Description: The fixed outbound IP every partner call comes from; give this to partners to allowlist
+    Value: !Ref NatEip
