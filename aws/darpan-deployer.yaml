@@ -175,10 +175,11 @@ Resources:
                   - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-darpan:*'
               - Sid: EcsAppFamily
                 Effect: Allow
+                # ECS authorises DeregisterTaskDefinition on resource '*' and sends no ecs:task-definition key, so
+                # the old StringLike condition never matched: every deploy since 2026-11-04 left the replaced
+                # revision ACTIVE (DELETE_FAILED in cleanup). Deregistering never stops a running task.
                 Action: ecs:DeregisterTaskDefinition
                 Resource: '*'
-                Condition:
-                  StringLike: { 'ecs:task-definition': !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-darpan:*' }
               - Sid: PassTaskRoles
                 Effect: Allow
                 Action: iam:PassRole
