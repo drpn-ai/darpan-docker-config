@@ -150,7 +150,9 @@ ARG MOQUI_GQL_REF=v1.0.0
 # moqui-gql it compileOnly-depends on darpan, so it is built by its own jar task below.
 # v0.1.0 (first tag, with darpan v3.0.0, which carries the agent entities; darpan v2.1.12 does not, so the two
 # move together).
-ARG DARPAN_AGENT_REF=v0.1.0
+# v0.1.1 (DAR-BE-244): with no key, the agent authenticates by AWS workload identity federation (adds the AWS SDK
+# sts module, URLConnection client only). Pairs with darpan v3.0.0 unchanged.
+ARG DARPAN_AGENT_REF=v0.1.1
 
 WORKDIR /
 

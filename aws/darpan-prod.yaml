@@ -86,6 +86,21 @@ Parameters:
     Description: >-
       Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (includes app.drpn.ai). Set
       it during the rehearsal only, e.g. to add a local darpan-ui origin.
+  AnthropicFederationRuleId:
+    Type: String
+    Default: fdrl_016PDR99kZBkv94xWScGGqSz
+    Description: >-
+      Anthropic workload identity federation (DAR-BE-244): the rule that maps this stack's task role to the service account
+      below. Empty turns federation off (the agent then has no credential). None of these four ids is a secret.
+  AnthropicOrganizationId:
+    Type: String
+    Default: 84833ad5-d832-4d93-ac5d-facaf7081a74
+  AnthropicServiceAccountId:
+    Type: String
+    Default: svac_019Uc4oi7HGAgELDq7NAKfeW
+  AnthropicWorkspaceId:
+    Type: String
+    Default: wrkspc_01HY9rfrgeeGYCw4JTr7rif5
   AppBaseUrl:
     Type: String
     Default: https://app.drpn.ai
@@ -117,6 +132,7 @@ Parameters:
 Conditions:
   SchedulerOff: !Equals [!Ref SchedulerEnabled, 'false']
   HasAllowOrigins: !Not [!Equals [!Ref AllowOrigins, '']]
+  HasAnthropicFederation: !Not [!Equals [!Ref AnthropicFederationRuleId, '']]
   HasTask: !Equals [!Ref DesiredCount, 1]
 
 Resources:
@@ -806,6 +822,14 @@ Resources:
             - { Name: DARPAN_LOAD_UPGRADE_DATA, Value: 'Y' }
             - { Name: DARPAN_UPGRADE_DATA_TYPES, Value: !Ref UpgradeDataTypes }
             - { Name: DARPAN_APP_BASE_URL, Value: !Ref AppBaseUrl }
+            # DAR-BE-244: darpan-agent reaches Claude by workload identity federation, never an API key (ANTHROPIC_API_KEY
+            # must stay unset: it outranks federation). The agent mints an AWS-signed JWT for the task role into the token
+            # file (container-local, owner-only, replaced every 15 min) and the Anthropic SDK exchanges it.
+            - !If [HasAnthropicFederation, { Name: ANTHROPIC_FEDERATION_RULE_ID, Value: !Ref AnthropicFederationRuleId }, !Ref AWS::NoValue]
+            - !If [HasAnthropicFederation, { Name: ANTHROPIC_ORGANIZATION_ID, Value: !Ref AnthropicOrganizationId }, !Ref AWS::NoValue]
+            - !If [HasAnthropicFederation, { Name: ANTHROPIC_SERVICE_ACCOUNT_ID, Value: !Ref AnthropicServiceAccountId }, !Ref AWS::NoValue]
+            - !If [HasAnthropicFederation, { Name: ANTHROPIC_WORKSPACE_ID, Value: !Ref AnthropicWorkspaceId }, !Ref AWS::NoValue]
+            - !If [HasAnthropicFederation, { Name: ANTHROPIC_IDENTITY_TOKEN_FILE, Value: /tmp/darpan-anthropic/identity.jwt }, !Ref AWS::NoValue]
             # Moqui reads an env var named like a default-property in place of the conf value; 0 = no scheduler.
             - !If
               - SchedulerOff
