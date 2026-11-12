@@ -69,7 +69,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v3.0.2
+ARG DARPAN_REF=v3.0.3
 # darpan v2.1.12 moves alone: an audit can play the month that just ended (DAR-BE-178).
 # darpan v3.0.2 (hotfix on 3.0; no darpan v3.0.1: that number is docker-config's agent-only hotfix) moves
 # darpan-hotwax v1.0.1, shopify-darpan v0.9.1, netsuite-darpan v0.5.1 and darpan-agent v0.1.2 with it: the NetSuite ->
