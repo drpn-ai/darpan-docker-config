@@ -86,6 +86,13 @@ Parameters:
     Description: >-
       Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (includes app.drpn.ai). Set
       it during the rehearsal only, e.g. to add a local darpan-ui origin.
+  AgentEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      DARPAN_AGENT_ENABLED (DAR-BE-159): the embedded agent's server switch. A tenant also needs agentEnabled=Y and a user a
+      live AI access grant before anything is sent to Claude. Kill switch: deploy.sh prod --tag <current> --set AgentEnabled=false.
   AnthropicFederationRuleId:
     Type: String
     Default: fdrl_016PDR99kZBkv94xWScGGqSz
@@ -822,6 +829,7 @@ Resources:
             - { Name: DARPAN_LOAD_UPGRADE_DATA, Value: 'Y' }
             - { Name: DARPAN_UPGRADE_DATA_TYPES, Value: !Ref UpgradeDataTypes }
             - { Name: DARPAN_APP_BASE_URL, Value: !Ref AppBaseUrl }
+            - { Name: DARPAN_AGENT_ENABLED, Value: !Ref AgentEnabled }
             # DAR-BE-244: darpan-agent reaches Claude by workload identity federation, never an API key (ANTHROPIC_API_KEY
             # must stay unset: it outranks federation). The agent mints an AWS-signed JWT for the task role into the token
             # file (container-local, owner-only, replaced every 15 min) and the Anthropic SDK exchanges it.
