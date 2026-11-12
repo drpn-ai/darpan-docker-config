@@ -198,6 +198,13 @@ Resources:
                 Effect: Allow
                 Action: [cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms, cloudwatch:DescribeAlarms, cloudwatch:TagResource]
                 Resource: !Sub 'arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AppStackName}-*'
+              # CloudFormation checks an AWS-typed parameter as the executing role on every update: NatAmiId is
+              # AWS::EC2::Image::Id (DAR-OPS-016), so without this the v3.0.0 deploy rolled back with AccessDenied
+              # on ec2:DescribeImages. Read-only; DescribeImages supports no resource scoping.
+              - Sid: ValidateParameterTypes
+                Effect: Allow
+                Action: ec2:DescribeImages
+                Resource: '*'
               - Sid: AlbIngressForAllowedCidr
                 Effect: Allow
                 Action:
