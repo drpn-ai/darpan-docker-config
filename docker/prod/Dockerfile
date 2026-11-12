@@ -69,8 +69,14 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v2.1.12
+ARG DARPAN_REF=v3.0.0
 # darpan v2.1.12 moves alone: an audit can play the month that just ended (DAR-BE-178).
+# darpan v3.0.0 (major: facade contract 3 -> 4) moves EVERY component pin below. Its OMS source config drops
+# ordersPath/returnsPageSize (OMS reads are GraphQL only, DAR-BE-052, darpan-hotwax v1.0.0); audit findings are
+# open or fixed only, so moqui-gql v1.0.0's audit types drop pending/pendingUntil/graceDays (DAR-BE-206) and v0.1.1
+# cannot serve it; the agent tools (DAR-BE-159) and CLI reads (DAR-CLI-003) land in darpan-agent v0.1.0,
+# shopify-darpan v0.9.0, netsuite-darpan v0.5.0 and darpan-hotwax v1.0.0; database-darpan v0.3.0 verifies the
+# server's identity (DAR-BE-082). Spark 4.2.1 + Drools 10.2.0 (DAR-BE-185/184) ship with darpan v3.0.0.
 # darpan-hotwax/shopify-darpan tags below v0.3.0 predate the JDK 21 / Moqui 4 / Gradle 9 migration
 # and still declare the removed :runtime:component:moqui-atomikos project — they cannot build on
 # this stack. v0.5.0 tags == the component mains cut with darpan v1.2.0 (the seeded connector
@@ -120,9 +126,9 @@ ARG DARPAN_REF=v2.1.12
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
 # darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
-ARG DARPAN_HOTWAX_REF=v0.10.4
-ARG SHOPIFY_DARPAN_REF=v0.8.5
-ARG NETSUITE_DARPAN_REF=v0.4.3
+ARG DARPAN_HOTWAX_REF=v1.0.0
+ARG SHOPIFY_DARPAN_REF=v0.9.0
+ARG NETSUITE_DARPAN_REF=v0.5.0
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
@@ -132,19 +138,18 @@ ARG NETSUITE_DARPAN_REF=v0.4.3
 # darpan v2.1.0; it compiles against it unchanged.
 # v0.2.2 (darpan v2.1.1): another tenant's database source answers exactly like a missing one (DAR-BE-135).
 # No commits for darpan v2.1.2; it compiles against it unchanged.
-ARG DATABASE_DARPAN_REF=v0.2.2
+ARG DATABASE_DARPAN_REF=v0.3.0
 # moqui-gql v0.1.0 (first tag, with darpan v2.1.0): darpan 2.1's audit report, finding and findings roots
 # need it, and the report it serves has no extendedThru. Moves with DARPAN_REF.
 # v0.1.1 (darpan v2.1.1): tenant admins mint API keys for their own tenant (DAR-BE-136); public API
 # paths refuse cookies (DAR-DOCS-005).
 # No commits for darpan v2.1.2; v0.1.1 serves it unchanged.
-ARG MOQUI_GQL_REF=v0.1.1
+ARG MOQUI_GQL_REF=v1.0.0
 # darpan-agent (DAR-BE-159): the embedded Claude agent. Off unless DARPAN_AGENT_ENABLED=true AND a tenant has
 # agentEnabled=Y; it reads ANTHROPIC_API_KEY from the container env at run time (never baked into the image). Like
 # moqui-gql it compileOnly-depends on darpan, so it is built by its own jar task below.
-# v0.1.0 is cut together with the darpan release that carries DAR-BE-159. DARPAN_REF must move to that release at
-# the same time: darpan v2.1.12 lacks the agent entities, so this ref cannot build against it. (The tag does not
-# exist yet; a prod build fails at the clone until it does.)
+# v0.1.0 (first tag, with darpan v3.0.0, which carries the agent entities; darpan v2.1.12 does not, so the two
+# move together).
 ARG DARPAN_AGENT_REF=v0.1.0
 
 WORKDIR /
