@@ -323,9 +323,15 @@ Resources:
           - |
             #!/bin/bash
             set -euo pipefail
-            signal() { /opt/aws/bin/cfn-signal -e "$1" --stack ${AWS::StackName} --resource NatInstance --region ${AWS::Region} || true; }
-            trap 'signal 1' ERR
-            dnf -y install iptables-nft aws-cfn-bootstrap dnf-automatic
+            # the failing line travels in the signal's reason, so a failure is readable in the stack events
+            # even after rollback has terminated the instance
+            signal() { /opt/aws/bin/cfn-signal -e "$1" --reason "$2" --stack ${AWS::StackName} --resource NatInstance --region ${AWS::Region} || true; }
+            trap 'rc=$?; signal 1 "nat setup failed at line $LINENO (exit $rc): $BASH_COMMAND | $(journalctl -u darpan-nat -n 3 -o cat --no-pager 2>/dev/null | tr "\n" " " | cut -c1-300)"' ERR
+            for try in 1 2 3; do
+              dnf -y install iptables-nft aws-cfn-bootstrap dnf-automatic && break
+              if [ "$try" = 3 ]; then trap - ERR; signal 1 "dnf install failed 3 times (see /var/log/cloud-init-output.log)"; exit 1; fi
+              sleep 15
+            done
             cat > /usr/local/sbin/darpan-nat <<'EOF'
             #!/bin/bash
             set -euo pipefail
@@ -354,7 +360,7 @@ Resources:
             { sed -i 's/^upgrade_type.*/upgrade_type = security/; s/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf \
               && systemctl enable --now dnf-automatic.timer; } || echo "dnf-automatic not enabled" >&2
             iptables -t nat -S POSTROUTING | grep -q MASQUERADE
-            signal 0
+            signal 0 "nat forwarding up"
           - VpcCidr: !GetAtt Vpc.CidrBlock
 
   NatEip:
