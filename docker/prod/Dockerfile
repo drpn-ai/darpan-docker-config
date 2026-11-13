@@ -182,12 +182,13 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
     git clone --depth 1 -b "$DATABASE_DARPAN_REF" https://github.com/drpn-ai/database-darpan.git /moqui-framework/runtime/component/database-darpan; \
     git clone --depth 1 -b "$DARPAN_AGENT_REF"    https://github.com/drpn-ai/darpan-agent.git   /moqui-framework/runtime/component/darpan-agent; \
     git clone --depth 1 -b "$MOQUI_GQL_REF"       https://github.com/drpn-ai/moqui-gql.git      /moqui-framework/runtime/component/moqui-gql; \
-    rm -f /root/.netrc
+    rm -f /root/.netrc; \
+    chown -R 1000:1000 /moqui-framework
 
 WORKDIR /moqui-framework
 
-# Fix 2026-06-27: GRADLE_USER_HOME must land inside /moqui-framework/ (already chowned to moqui)
-# so the non-root moqui user can write the Gradle distribution during addRuntime and upgrade-data loads.
+# Fix 2026-06-27: GRADLE_USER_HOME must land inside /moqui-framework/ (owned by uid 1000, DAR-OPS-002)
+# so the non-root moqui user can write the Gradle distribution during the boot's upgrade-data load.
 ENV GRADLE_USER_HOME=/moqui-framework/.gradle
 
 # Make Temurin 21 the default JDK for BOTH the build (Gradle 9 needs JVM 17+; the addRuntime step
@@ -206,11 +207,12 @@ RUN java -version 2>&1 | grep -q 'version "21' \
 # build with `docker build -f docker/prod/Dockerfile .`). This repo is the sole home of the
 # Docker config; the darpan component's embedded docker/ directory was removed 2026-07-04
 # (1af89e7), so nothing may be copied out of the cloned component anymore.
-COPY docker/MoquiProductionConf.xml runtime/conf/
+COPY --chown=1000:1000 docker/MoquiProductionConf.xml runtime/conf/
 # Guard the SameSite swap: if the upstream framework ever drops the LAX marker, this would silently
 # no-op and downgrade cookie policy. Fail the docker build instead.
 RUN grep -q '__SAME_SITE_LAX__' framework/src/main/webapp/WEB-INF/web.xml \
-    && sed -i 's/__SAME_SITE_LAX__/__SAME_SITE_NONE__/g' framework/src/main/webapp/WEB-INF/web.xml
+    && sed -i 's/__SAME_SITE_LAX__/__SAME_SITE_NONE__/g' framework/src/main/webapp/WEB-INF/web.xml \
+    && chown 1000:1000 framework/src/main/webapp/WEB-INF/web.xml
 # Guard the framework build.gradle patch (adds the Spark --add-exports for JDK 17/21 and flips the
 # run/load tasks to append-form jvmArgs). The patch is coupled to the framework build.gradle structure
 # at MOQUI_FRAMEWORK_REF; if that ref is bumped and upstream build.gradle drifts, a bare `git apply`
@@ -224,7 +226,7 @@ RUN git apply --check /tmp/buildGradle.patch 2>/dev/null \
          echo "       append-form jvmArgs edits, then 'git diff build.gradle' >" >&2; \
          echo "       docker/buildGradle.patch in darpan-docker-config, and rebuild." >&2; \
          exit 1; }; \
-    git apply /tmp/buildGradle.patch && rm -f /tmp/buildGradle.patch
+    git apply /tmp/buildGradle.patch && rm -f /tmp/buildGradle.patch && chown 1000:1000 build.gradle
 
 # Create WAR file. Build the moqui-gql engine jar FIRST: it contributes a GqlToolFactory loaded at
 # ECF init and vendors graphql-java into its lib/; nothing depends on it in the build graph, so
@@ -248,18 +250,19 @@ RUN --mount=type=cache,id=darpan-gradle-prod,target=/gradle-cache,sharing=locked
     ./gradlew --no-daemon :runtime:component:moqui-gql:jar :runtime:component:darpan-agent:jar addRuntime; \
     rm -f "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
     rm -rf /gradle-cache/modules-2 /gradle-cache/journal-1; \
-    cp -a "$GRADLE_USER_HOME/caches/modules-2" "$GRADLE_USER_HOME/caches/journal-1" /gradle-cache/
+    cp -a "$GRADLE_USER_HOME/caches/modules-2" "$GRADLE_USER_HOME/caches/journal-1" /gradle-cache/; \
+    find /moqui-framework \( ! -user 1000 -o ! -group 1000 \) -exec chown -h 1000:1000 {} +
 
 # Extract WAR file.
 WORKDIR /moqui-deploy
-COPY docker/prod/entrypoint.sh /moqui-deploy/entrypoint.sh
+COPY --chown=1000:1000 docker/prod/entrypoint.sh /moqui-deploy/entrypoint.sh
 # P1 Observability: copy the JSON log4j2 config so the prod JVM emits structured JSON to STDOUT.
 # Activated below via -Dlog4j2.configurationFile. Local dev-stack.sh does NOT set this property
 # so developers keep the readable PatternLayout.
-COPY docker/log4j2-json.xml /moqui-deploy/log4j2-json.xml
+COPY --chown=1000:1000 docker/log4j2-json.xml /moqui-deploy/log4j2-json.xml
 
 RUN chmod +x entrypoint.sh
-RUN jar -xvf /moqui-framework/moqui-plus-runtime.war
+RUN jar -xvf /moqui-framework/moqui-plus-runtime.war && chown -R 1000:1000 /moqui-deploy
 
 # DB_LOAD is the ops-runbook command for a first-time full DB load (entrypoint.sh does NOT run it).
 # darpan-seed-initial/darpan-seed must be INSIDE -Ptypes — loadProduction only forwards -Ptypes; a
@@ -297,13 +300,26 @@ ENV TIME_ZONE=
 # contents (idempotent — no-op when curl is already present).
 RUN command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*)
 
-# TEMP 2026-07-02 — non-root USER moqui (MACH P1 #1, 2026-06-27) removed: the UAT datamanager
-# volume carries root-owned run directories from pre-hardening images and the deployment does not
-# yet set securityContext.fsGroup, so uid-1000 writes failed (AccessDeniedException on new
-# reconciliation-run dirs). Container runs as root until then. REINSTATE the moqui user once the
-# pod spec sets fsGroup: 1000 (+ fsGroupChangePolicy: OnRootMismatch) or the volume ownership is
-# fixed via a one-time root init container; a pod securityContext with runAsNonRoot: true must also
-# be dropped while this is in effect.
+# DAR-OPS-002: run as the non-root moqui user (uid/gid 1000), reinstated after the 2026-07-02 TEMP root posture.
+# Everything the container writes at run time is under two trees owned by 1000:1000:
+#   /moqui-framework  entrypoint `sed -i` on runtime/conf/MoquiProductionConf.xml (needs the conf DIRECTORY writable),
+#                     the boot's gradlew upgrade-data load (GRADLE_USER_HOME .gradle, build/ dirs, runtime/log, txlog, db)
+#   /moqui-deploy     the server's live Moqui runtime (MoquiStart uses ./runtime: log, txlog, db, sessions,
+#                     datamanager) and execwartmp/
+# plus /tmp (Spark scratch, the Anthropic identity token file). Port 8080 needs no root.
+# Mounted volumes must let uid 1000 write: AWS prod/UAT mount EFS through an access point that maps every write to
+# 1000:1000. A volume holding root-owned files from the root-posture images (a Kubernetes persistent volume, e.g.)
+# needs a one-time chown -R 1000:1000, fsGroup: 1000, or runAsUser: 0 on that deployment, or new run directories fail
+# with AccessDeniedException. uid 1000 is reused if the base image already has it (USER is numeric for that reason).
+# Ownership is set in the step that creates each file (clone, COPY --chown, the Gradle build, the WAR extract): a
+# chown -R here would copy both trees into a new layer and nearly double the image (2.3 GB -> 4.2 GB measured). The
+# guard fails the build if a later edit leaves anything there root-owned.
+RUN set -e; \
+    getent group 1000 >/dev/null || groupadd --gid 1000 moqui; \
+    getent passwd 1000 >/dev/null || useradd --uid 1000 --gid 1000 --create-home --home-dir /home/moqui --shell /usr/sbin/nologin moqui; \
+    bad=$(find /moqui-framework /moqui-deploy \( ! -user 1000 -o ! -group 1000 \) -print -quit); \
+    if [ -n "$bad" ]; then echo "ERROR: $bad is not owned by 1000:1000; set ownership in the step that creates it" >&2; exit 1; fi
+USER 1000:1000
 
 EXPOSE 8080
 
