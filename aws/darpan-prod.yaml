@@ -17,7 +17,10 @@ Metadata:
     must:
       - DesiredCount <= 1 (in-process Moqui scheduler; 2 tasks double-run automations)
       - SchedulerEnabled stays false until cutover, so a rehearsal never runs a tenant's automations
-      - entity_ds_crypt_pass never changes once tenant connections exist (it decrypts every stored token)
+      - entity_ds_crypt_pass (it decrypts every stored token) changes only by the rotation runbook (DAR-OPS-019); the
+        outgoing key goes into a secret named CryptPassOldSecret wired through CryptPassOldSecretArn, the new key is put
+        into CryptPassSecret as a new version (never regenerate or replace that resource), rotate#EncryptedFieldValues
+        re-encrypts every row, then CryptPassOldSecretArn goes back to empty
       - no secret values in this file or its parameters; Secrets Manager only
       - no client or tenant names in this file (the repo is public)
       - every IAM role carries the deployer stack's AppRoleBoundary (RoleBoundaryPolicyName); a role that needs a new AWS
@@ -120,11 +123,20 @@ Parameters:
     Description: >-
       Data types the entrypoint loads before Moqui starts. The default is the first-boot load on an empty
       database; switch to darpan-seed after the first successful boot.
+  CryptPassOldSecretArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:CryptPassOldSecret-[A-Za-z0-9]{6}$'
+    Description: >-
+      Empty except during a field-encryption key rotation (DAR-OPS-019). Then: the ARN of a secret named
+      CryptPassOldSecret holding the OUTGOING entity_ds_crypt_pass. The task gets it as entity_ds_crypt_pass_old, so
+      Moqui still decrypts old-key values while rotate#EncryptedFieldValues re-encrypts them under the new key in
+      CryptPassSecret. Only the task definition changes, so deploy.sh --set flips it; clear it after the sweep.
   AllowOrigins:
     Type: String
     Default: ''
     Description: >-
-      Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (includes app.drpn.ai). Set
+      Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (app.drpn.ai, app-uat.drpn.ai). Set
       it during the rehearsal only, e.g. to add a local darpan-ui origin.
   AgentEnabled:
     Type: String
@@ -186,6 +198,7 @@ Conditions:
   SchedulerOff: !Equals [!Ref SchedulerEnabled, 'false']
   WafBlock: !Equals [!Ref WafMode, block]
   HasAllowOrigins: !Not [!Equals [!Ref AllowOrigins, '']]
+  HasCryptPassOld: !Not [!Equals [!Ref CryptPassOldSecretArn, '']]
   HasAnthropicFederation: !Not [!Equals [!Ref AnthropicFederationRuleId, '']]
   HasTask: !Equals [!Ref DesiredCount, 1]
 
@@ -544,7 +557,10 @@ Resources:
         why: >-
           entity_ds_crypt_pass encrypts every tenant's stored OMS/Shopify/NetSuite tokens. Fresh for this instance:
           the config transfer seals credentials to this instance, which stores them under this key
-        must: [never regenerate or replace once tenant connections are saved; retained on stack delete]
+        must:
+          - never regenerate or replace once tenant connections are saved; retained on stack delete
+          - a new key only as a new secret version inside the rotation runbook, with the outgoing key wired through
+            CryptPassOldSecretArn first (DAR-OPS-019)
     Properties:
       Description: Darpan entity_ds_crypt_pass (production)
       GenerateSecretString:
@@ -714,6 +730,9 @@ Resources:
                   - !Ref CryptPassSecret
                   - !Ref JwtKeySecret
                   - !Ref DbMasterSecret
+                  # The outgoing key during a rotation (CryptPassOldSecretArn). Granted by name, not by the parameter,
+                  # so wiring or clearing it changes only the task definition.
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:CryptPassOldSecret-*'
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -1275,6 +1294,8 @@ Resources:
             - { Name: Moqui_DB_PASSWORD, ValueFrom: !Sub '${DbMasterSecret}:password::' }
             - { Name: entity_ds_crypt_pass, ValueFrom: !Ref CryptPassSecret }
             - { Name: JWT_KEY, ValueFrom: !Ref JwtKeySecret }
+            # Rotation window only; unset, the entrypoint and MoquiProductionConf.xml default it to entity_ds_crypt_pass.
+            - !If [HasCryptPassOld, { Name: entity_ds_crypt_pass_old, ValueFrom: !Ref CryptPassOldSecretArn }, !Ref AWS::NoValue]
           LogConfiguration:
             LogDriver: awslogs
             Options:

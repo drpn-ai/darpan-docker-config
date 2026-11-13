@@ -24,7 +24,7 @@ set -euo pipefail
 REGION=us-east-2
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
-SETTABLE="DesiredCount SchedulerEnabled HostName AllowedCidr AllowOrigins UpgradeDataTypes TaskCpu TaskMemory AgentEnabled"
+SETTABLE="DesiredCount SchedulerEnabled HostName AllowedCidr AllowOrigins UpgradeDataTypes TaskCpu TaskMemory AgentEnabled CryptPassOldSecretArn"
 
 usage() {
   cat <<'EOF'
@@ -40,6 +40,7 @@ Usage: aws/deploy.sh <uat|prod> [options]
   --maven-mirror      resolve Maven Central through Google's mirror (use when Central answers 429).
   --set KEY=VALUE     also change a stack parameter (repeatable). Allowed: DesiredCount SchedulerEnabled
                       HostName AllowedCidr AllowOrigins UpgradeDataTypes TaskCpu TaskMemory AgentEnabled
+                      CryptPassOldSecretArn (prod; field-key rotation window, DAR-OPS-019)
   --restart           replace the running task on the image it already runs (no build, no change set):
                       re-runs the boot's upgrade-data load. Needs --yes.
   --yes               execute the change set. Without it: build + push (if needed), print the plan, stop.

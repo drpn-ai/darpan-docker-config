@@ -283,7 +283,12 @@ ENV Moqui_DB_HOST=
 ENV Moqui_DB_USER=
 ENV Moqui_DB_PASSWORD=
 ENV Moqui_DB_NAME=
-ENV Moqui_WEBAPP_ALLOW_ORIGINS="darpan-app-uat.hotwax.io,darpan-app.hotwax.io,darpan-uat.hotwax.io,darpan.hotwax.io,hotwax-darpan-dev.web.app,hotwax-darpan-dev.firebaseapp.com,hc-darpan-uat.web.app,hc-darpan-uat.firebaseapp.com,hc-darpan.web.app,hc-darpan.firebaseapp.com,app-uat.drpn.ai,app.drpn.ai"
+# DAR-OPS-019: Darpan's own app origins only. The retired HotWax-hosted UIs (*.hotwax.io), HotWax's dev Firebase
+# project and the Firebase default domains of Darpan's own sites (hc-darpan[-uat].web.app/.firebaseapp.com, aliases of
+# app[-uat].drpn.ai nobody signs in from) are gone. Steve Madden's instance builds from this file too, but its UI
+# (sm-darpan.hotwax.io) was never on this list: its backend uses header auth behind an ingress that sets CORS itself.
+# A deployment that needs another origin sets Moqui_WEBAPP_ALLOW_ORIGINS (the prod stack's AllowOrigins parameter).
+ENV Moqui_WEBAPP_ALLOW_ORIGINS="app-uat.drpn.ai,app.drpn.ai"
 ENV WEBAPP_ALLOW_ORIGINS=
 ENV ELASTICSEARCH_HOST=
 ENV TIME_ZONE=

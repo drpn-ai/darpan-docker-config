@@ -111,6 +111,8 @@ Resources:
               - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:CryptPassSecret-*'
               - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:JwtKeySecret-*'
               - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:DbMasterSecret-*'
+              # The outgoing field-encryption key during a rotation (app stack CryptPassOldSecretArn, DAR-OPS-019).
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:CryptPassOldSecret-*'
           - Sid: MountRunFiles
             Effect: Allow
             Action: [elasticfilesystem:ClientMount, elasticfilesystem:ClientWrite]
