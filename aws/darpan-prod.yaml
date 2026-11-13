@@ -1262,7 +1262,7 @@ Resources:
               Protocol: tcp
           MountPoints:
             - SourceVolume: datamanager
-              ContainerPath: /moqui-framework/runtime/datamanager
+              ContainerPath: /moqui-deploy/runtime/datamanager  # the server runs from /moqui-deploy/runtime; the old path left run files on task disk (DAR-OPS-020)
           Environment:
             - { Name: Moqui_DB_HOST, Value: !GetAtt Database.Endpoint.Address }
             - { Name: Moqui_DB_NAME, Value: darpan }
