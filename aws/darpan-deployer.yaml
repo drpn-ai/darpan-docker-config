@@ -14,6 +14,9 @@ Metadata:
         may change only what a deploy touches (task definitions, the service, its alarms, the ALB SG ingress) and read
         what a stack update resolves (task role ARNs, DB endpoint and master secret, ALB, repository); no IAM writes
       - deploy.sh's own rails stay in force (change-set whitelist, DesiredCount <= 1, boot-log check)
+      - every role the app stack creates or changes carries AppRoleBoundary (DAR-OPS-018); InfraChangeRole cannot create a
+        role, add a policy to one, or move a boundary without it once AppRoleBoundaryEnforced is true
+      - this stack names its boundary policy, so its own updates need CAPABILITY_NAMED_IAM
       - no secrets or client names in this file (the repo is public)
     ref: darpan-docker-config/aws/deploy.sh, darpan-docker-config/aws/darpan-prod.yaml, darpan-docker-config/aws/darpan-build.yaml
 
@@ -35,13 +38,124 @@ Parameters:
   SourceRepoUrl:
     Type: String
     Default: https://github.com/drpn-ai/darpan-docker-config.git
+  LogRetentionDays:
+    Type: Number
+    Default: 365
+    AllowedValues: [90, 180, 365, 400, 545, 731]
+    Description: >-
+      Deploy log retention (DAR-OPS-018, SOC 2): every deploy's who/what/when (args, component commits, change set,
+      verification) stays readable for a year of audit window.
+  AppRoleBoundaryEnforced:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      true: InfraChangeRole may create an app-stack role, put or attach a policy on one, or set a boundary only with
+      AppRoleBoundary. false is for the ONE rollout window (DAR-OPS-018) while the app stack's existing roles, created
+      without a boundary, receive it (it also lets a failed rollout's rollback remove the boundary again); flip back to
+      true right after that app-stack change set completes.
+
+Conditions:
+  EnforceBoundary: !Equals [!Ref AppRoleBoundaryEnforced, 'true']
 
 Resources:
   DeployLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}'
-      RetentionInDays: 90
+      RetentionInDays: !Ref LogRetentionDays
+
+  AppRoleBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Permissions boundary for every role the app stack creates (DAR-OPS-018). InfraChangeRole can write inline
+          policies on AppStackName-* roles, so without a boundary a reviewed-but-wrong template could mint an
+          admin-equivalent role. The boundary is the ceiling: the union of what the task execution role, task role, NAT
+          role and VPC flow-log role legitimately need, and nothing else (no IAM, no S3 objects, no data-plane writes
+          beyond logs). A role's effective access is its own policy AND this.
+        must:
+          - widen it in the same change that gives an app-stack role a new AWS permission, or that permission silently
+            does nothing (the boundary intersects, it never errors at create time)
+          - InfraChangeRole holds no iam:*Policy* action on it, so the role it constrains cannot edit it
+          - mirrors AmazonSSMManagedInstanceCore's actions explicitly (not ssm:*: SendCommand would be an escalation path)
+    Properties:
+      ManagedPolicyName: !Sub '${AWS::StackName}-app-role-boundary'
+      Description: !Sub 'Permissions boundary for ${AppStackName} roles (DAR-OPS-018)'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PullAppImage
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: PullAppImageLayers
+            Effect: Allow
+            Action: [ecr:BatchCheckLayerAvailability, ecr:GetDownloadUrlForLayer, ecr:BatchGetImage]
+            Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AppStackName}/*'
+          - Sid: WriteAppLogs
+            Effect: Allow
+            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+            Resource:
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${AppStackName}/*'
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vpc/flowlogs/${AppStackName}*'
+          - Sid: DescribeLogGroups
+            Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: '*'
+          - Sid: ReadAppSecrets
+            Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource:
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:CryptPassSecret-*'
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:JwtKeySecret-*'
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:DbMasterSecret-*'
+          - Sid: MountRunFiles
+            Effect: Allow
+            Action: [elasticfilesystem:ClientMount, elasticfilesystem:ClientWrite]
+            Resource: !Sub 'arn:aws:elasticfilesystem:${AWS::Region}:${AWS::AccountId}:file-system/*'
+          - Sid: SessionManagerChannels
+            Effect: Allow
+            Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              - ec2messages:AcknowledgeMessage
+              - ec2messages:DeleteMessage
+              - ec2messages:FailMessage
+              - ec2messages:GetEndpoint
+              - ec2messages:GetMessages
+              - ec2messages:SendReply
+            Resource: '*'
+          - Sid: SsmManagedInstanceCore
+            Effect: Allow
+            Action:
+              - ssm:DescribeAssociation
+              - ssm:DescribeDocument
+              - ssm:GetDeployablePatchSnapshotForInstance
+              - ssm:GetDocument
+              - ssm:GetManifest
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:ListAssociations
+              - ssm:ListInstanceAssociations
+              - ssm:PutComplianceItems
+              - ssm:PutConfigurePackageResult
+              - ssm:PutInventory
+              - ssm:UpdateAssociationStatus
+              - ssm:UpdateInstanceAssociationStatus
+              - ssm:UpdateInstanceInformation
+            Resource: '*'
+          - Sid: NatReadySignal
+            Effect: Allow
+            Action: cloudformation:SignalResource
+            Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppStackName}/*'
+          - Sid: AnthropicWorkloadIdentity
+            Effect: Allow
+            Action: sts:GetWebIdentityToken
+            Resource: '*'
 
   DeployRole:
     Type: AWS::IAM::Role
@@ -143,7 +257,7 @@ Resources:
         why: >-
           CloudFormation's service role for the app stack. A stack update resolves every !GetAtt and dynamic reference
           it touches with the executing identity: the task roles' ARNs (iam:GetRole), the DB endpoint
-          (rds:DescribeDBInstances), the Database's {{resolve:secretsmanager}} master credentials, and the ALB, target
+          (rds:DescribeDBInstances), the Database's Secrets Manager dynamic references (master credentials), and the ALB, target
           group and repository in the outputs and alarms. Three deployer runs failed one missing read at a time; this
           role holds them so the deployer never does. Writes stay limited to what a deploy changes: task definition,
           service, the stack's alarms and the ALB security group ingress (AllowedCidr).
@@ -238,6 +352,26 @@ Resources:
                 Effect: Allow
                 Action: [ecr:DescribeRepositories]
                 Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+              # DAR-OPS-018 added the trail, WAF, flow logs and log buckets. A deploy never changes them, but three
+              # earlier runs each died on one read nobody predicted, so the reads a stack update could make on them
+              # are granted up front. Read-only; none of these supports narrower resource scoping that holds here.
+              - Sid: ReadAuditResources
+                Effect: Allow
+                Action:
+                  - cloudtrail:GetTrail
+                  - cloudtrail:GetTrailStatus
+                  - cloudtrail:DescribeTrails
+                  - wafv2:GetWebACL
+                  - wafv2:GetWebACLForResource
+                  - wafv2:GetLoggingConfiguration
+                  - ec2:DescribeFlowLogs
+                  - logs:DescribeLogGroups
+                  - ecs:DescribeClusters
+                Resource: '*'
+              - Sid: ReadLogBuckets
+                Effect: Allow
+                Action: [s3:GetBucketLocation, s3:GetBucketPolicy]
+                Resource: !Sub 'arn:aws:s3:::${AppStackName}-*'
 
   InfraChangeRole:
     Type: AWS::IAM::Role
@@ -249,13 +383,18 @@ Resources:
           StackUpdateRole, a template change that adds resources outside a deploy's scope (the NAT instance, Elastic
           IP, routes, an IAM role) needs a broader role. Only the admin who reviews the change set passes this one
           (create-change-set --role-arn); DeployRole cannot (its PassRole is StackUpdateRole only), so unattended
-          deploys stay least-privilege. Covers the services darpan-prod.yaml uses; IAM writes only on the app
-          stack's own roles and instance profiles. After it applies a change, the next deployer run hands the stack
-          back to StackUpdateRole.
+          deploys stay least-privilege. Covers the services darpan-prod.yaml uses (DAR-OPS-018 added CloudTrail, WAF,
+          VPC flow logs and the two log buckets); IAM writes only on the app stack's own roles and instance profiles,
+          and only under AppRoleBoundary. After it applies a change, the next deployer run hands the stack back to
+          StackUpdateRole.
         must:
           - assumable only by cloudformation in this account
           - never passable by DeployRole or any automation
-          - IAM writes stay limited to ${AppStackName}-* roles and instance profiles, never this stack's own roles
+          - IAM writes stay limited to AppStackName-* roles and instance profiles, never this stack's own roles
+          - CreateRole / PutRolePolicy / AttachRolePolicy / PutRolePermissionsBoundary require AppRoleBoundary
+            (AppRoleBoundaryEnforced true); DeleteRolePermissionsBoundary exists only while it is false
+          - S3 writes only on AppStackName-* buckets (bucket config, never objects); CloudTrail writes only on
+            AppStackName-* trails; WAF writes only on AppStackName-* web ACLs
           - DeployRole keeps its OnlyAsStackUpdateRole deny (otherwise the deployer inherits this role while stored)
     Properties:
       AssumeRolePolicyDocument:
@@ -287,6 +426,68 @@ Resources:
                   - acm:DescribeCertificate
                   - secretsmanager:GetRandomPassword
                 Resource: '*'
+              # DAR-OPS-018: CloudTrail handler permissions (create/update/read), scoped to the app stack's trail.
+              - Sid: AuditTrail
+                Effect: Allow
+                Action: 'cloudtrail:*'
+                Resource: !Sub 'arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AppStackName}-*'
+              - Sid: AuditTrailReads
+                Effect: Allow
+                Action:
+                  - cloudtrail:DescribeTrails
+                  - cloudtrail:ListTrails
+                  - cloudtrail:GetTrail
+                  - cloudtrail:GetTrailStatus
+                  - cloudtrail:ListTags
+                  - cloudtrail:GetEventSelectors
+                  - cloudtrail:GetInsightSelectors
+                  # the Trail handler checks whether the account is in an organization (read-only)
+                  - organizations:DescribeOrganization
+                  - organizations:ListAWSServiceAccessForOrganization
+                Resource: '*'
+              # DAR-OPS-018: the regional web ACL, its ALB association and its logging configuration.
+              - Sid: WebAcl
+                Effect: Allow
+                Action:
+                  - wafv2:CreateWebACL
+                  - wafv2:UpdateWebACL
+                  - wafv2:DeleteWebACL
+                  - wafv2:AssociateWebACL
+                  - wafv2:DisassociateWebACL
+                  - wafv2:PutLoggingConfiguration
+                  - wafv2:DeleteLoggingConfiguration
+                  - wafv2:TagResource
+                  - wafv2:UntagResource
+                Resource:
+                  - !Sub 'arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/webacl/${AppStackName}-*/*'
+                  - !Sub 'arn:aws:wafv2:${AWS::Region}:*:regional/managedruleset/*/*'
+                  # the ALB's generated name does not start with the stack name, so the association names any ALB here
+                  - !Sub 'arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:loadbalancer/app/*'
+              - Sid: WebAclReads
+                Effect: Allow
+                Action: ['wafv2:Get*', 'wafv2:List*', 'wafv2:Describe*', wafv2:CheckCapacity]
+                Resource: '*'
+              # DAR-OPS-018: the ALB access-log and CloudTrail buckets. Bucket configuration only, never objects.
+              - Sid: LogBuckets
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:ListBucket
+                  - 's3:GetBucket*'
+                  - 's3:PutBucket*'
+                  - s3:DeleteBucketPolicy
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetAccelerateConfiguration
+                  - s3:GetAnalyticsConfiguration
+                  - s3:GetIntelligentTieringConfiguration
+                  - s3:GetInventoryConfiguration
+                  - s3:GetMetricsConfiguration
+                  - s3:GetReplicationConfiguration
+                Resource: !Sub 'arn:aws:s3:::${AppStackName}-*'
               - Sid: AppStackSecrets
                 Effect: Allow
                 Action: secretsmanager:*
@@ -294,17 +495,17 @@ Resources:
                   - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:CryptPassSecret-*'
                   - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:JwtKeySecret-*'
                   - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:DbMasterSecret-*'
+              # Actions that cannot widen a role's access. (UpdateAssumeRolePolicy changes who may assume it, but the
+              # boundary still caps what the role can do.)
               - Sid: AppStackRoles
                 Effect: Allow
                 Action:
-                  - iam:CreateRole
                   - iam:DeleteRole
                   - iam:GetRole
                   - iam:TagRole
                   - iam:UntagRole
                   - iam:UpdateRole
                   - iam:UpdateAssumeRolePolicy
-                  - iam:PutRolePolicy
                   - iam:GetRolePolicy
                   - iam:DeleteRolePolicy
                   - iam:ListRolePolicies
@@ -319,22 +520,63 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/${AppStackName}-*'
-              - Sid: AppStackRolesManagedPolicies
+              # Actions that grant access: only on a role that carries (or is created with) AppRoleBoundary. For
+              # PutRolePolicy the key is the role's CURRENT boundary, so a role created before DAR-OPS-018 must get
+              # the boundary first: that is the one window AppRoleBoundaryEnforced=false exists for.
+              - Sid: AppStackRolesUnderBoundary
                 Effect: Allow
-                Action: [iam:AttachRolePolicy, iam:DetachRolePolicy]
+                Action: [iam:CreateRole, iam:PutRolePolicy]
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
+                Condition: !If
+                  - EnforceBoundary
+                  - StringEquals: { 'iam:PermissionsBoundary': !Ref AppRoleBoundary }
+                  - !Ref AWS::NoValue
+              - Sid: SetAppRoleBoundary
+                Effect: Allow
+                Action: iam:PutRolePermissionsBoundary
                 Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
                 Condition:
-                  ArnEquals:
-                    'iam:PolicyARN':
-                      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-                      - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+                  StringEquals: { 'iam:PermissionsBoundary': !Ref AppRoleBoundary }
+              # Rollout window only (AppRoleBoundaryEnforced=false): if the app-stack change set that first adds the
+              # boundary fails, its rollback removes the boundary again; without this the stack would stick in
+              # UPDATE_ROLLBACK_FAILED. Gone once enforcement is back on, so a boundary can never be removed after.
+              - !If
+                - EnforceBoundary
+                - !Ref AWS::NoValue
+                - Sid: RollbackWindowRemoveBoundary
+                  Effect: Allow
+                  Action: iam:DeleteRolePermissionsBoundary
+                  Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
+              - Sid: ReadAppRoleBoundary
+                Effect: Allow
+                Action: [iam:GetPolicy, iam:GetPolicyVersion]
+                Resource: !Ref AppRoleBoundary
+              - Sid: AppStackRolesManagedPolicies
+                Effect: Allow
+                Action: iam:AttachRolePolicy
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
+                Condition: !If
+                  - EnforceBoundary
+                  - ArnEquals:
+                      'iam:PolicyARN':
+                        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+                        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+                    StringEquals: { 'iam:PermissionsBoundary': !Ref AppRoleBoundary }
+                  - ArnEquals:
+                      'iam:PolicyARN':
+                        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+                        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+              - Sid: DetachAppStackRolesManagedPolicies
+                Effect: Allow
+                Action: iam:DetachRolePolicy
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
               - Sid: PassAppStackRoles
                 Effect: Allow
                 Action: iam:PassRole
                 Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AppStackName}-*'
                 Condition:
                   StringEquals:
-                    'iam:PassedToService': [ecs-tasks.amazonaws.com, ec2.amazonaws.com]
+                    'iam:PassedToService': [ecs-tasks.amazonaws.com, ec2.amazonaws.com, vpc-flow-logs.amazonaws.com]
               # ${AppStackName}-* also matches this deployer stack's own roles (darpan-prod-deployer-*).
               - Sid: NeverTheDeployerRoles
                 Effect: Deny
@@ -354,6 +596,7 @@ Resources:
                       - elasticloadbalancing.amazonaws.com
                       - rds.amazonaws.com
                       - elasticfilesystem.amazonaws.com
+                      - wafv2.amazonaws.com
               - Sid: EncryptedVolumesAndSecrets
                 Effect: Allow
                 Action: [kms:CreateGrant, kms:Decrypt, kms:DescribeKey, 'kms:GenerateDataKey*', 'kms:ReEncrypt*']
@@ -422,3 +665,6 @@ Outputs:
   InfraChangeRoleArn:
     Description: Pass as --role-arn on a reviewed template change set for the app stack (never from automation)
     Value: !GetAtt InfraChangeRole.Arn
+  AppRoleBoundaryArn:
+    Description: Permissions boundary every app-stack role carries (darpan-prod.yaml RoleBoundaryPolicyName names it)
+    Value: !Ref AppRoleBoundary

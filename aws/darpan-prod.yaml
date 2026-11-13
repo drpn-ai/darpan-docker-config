@@ -2,8 +2,9 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Darpan production on Darpan's own AWS project (DAR-OPS-006): one Moqui backend on ECS Fargate ARM64 behind an
   HTTPS ALB, single-AZ RDS MySQL 8.4, EFS for runtime/datamanager run files. Derived from darpan-uat.yaml and kept
-  deliberately small: a NAT instance (not a NAT Gateway) for one fixed outbound IP, no OpenSearch, no WAF, no
-  Multi-AZ. Configuration arrives by the admin app's config transfer (credentials sealed to this instance), not by a
+  deliberately small: a NAT instance (not a NAT Gateway) for one fixed outbound IP, no OpenSearch, no Multi-AZ. The SOC 2
+  audit layer (DAR-OPS-018) is single-Region: CloudTrail, VPC flow logs, ALB access logs, a regional WAF, ECS Exec
+  session logs, a year of log retention. Configuration arrives by the admin app's config transfer (credentials sealed to this instance), not by a
   database dump, so run history is regenerated here.
 
 Metadata:
@@ -19,6 +20,9 @@ Metadata:
       - entity_ds_crypt_pass never changes once tenant connections exist (it decrypts every stored token)
       - no secret values in this file or its parameters; Secrets Manager only
       - no client or tenant names in this file (the repo is public)
+      - every IAM role carries the deployer stack's AppRoleBoundary (RoleBoundaryPolicyName); a role that needs a new AWS
+        permission needs the boundary widened in darpan-deployer.yaml first, or the permission silently does nothing
+      - everything stays in this one Region (new AWS experience): single-Region trail, regional WAF, no us-east-1 resources
     ref: darpan-docker-config/docker/prod/Dockerfile, darpan-docker-config/docker/prod/entrypoint.sh, darpan-uat.yaml
 
 Parameters:
@@ -68,12 +72,48 @@ Parameters:
     Description: db.t4g.small (2 GB) to start; Moqui's pool asks for up to 140 connections. Needs the Paid plan.
   DbBackupRetentionDays:
     Type: Number
-    Default: 3
+    Default: 14
     MinValue: 1
     MaxValue: 35
     Description: >-
-      Automated backup days. Kept short on purpose: run results and findings regenerate; what a backup really
-      protects is configuration, users and stored credentials.
+      Automated backup (point-in-time restore) days. 14 for SOC 2 (DAR-OPS-018): two weeks to notice a bad change to
+      configuration, users or stored credentials, which live only here. Run results and findings regenerate.
+  LogRetentionDays:
+    Type: Number
+    Default: 365
+    AllowedValues: [90, 180, 365, 400, 545, 731]
+    Description: >-
+      Days kept for the app, ECS Exec, VPC flow and WAF log groups and the ALB access-log bucket (DAR-OPS-018, SOC 2:
+      a full year of audit window). CloudTrail has its own fixed lock + expiry (see TrailBucket).
+  RoleBoundaryPolicyName:
+    Type: String
+    Default: darpan-prod-deployer-app-role-boundary
+    AllowedPattern: '^[A-Za-z0-9+=,.@_-]+$'
+    Description: >-
+      Name of the managed permissions boundary the deployer stack creates (darpan-deployer.yaml AppRoleBoundary,
+      <deployer stack>-app-role-boundary). Every role below carries it; InfraChangeRole may only create or extend
+      roles that do (DAR-OPS-018).
+  WafMode:
+    Type: String
+    Default: block
+    AllowedValues: [block, count]
+    Description: >-
+      block: the web ACL's managed rule groups and rate rule block what they match. count: they only count and log
+      (a soak to read the WAF log for false positives before enforcing). The first rollout may use count for a few
+      days; leave it on block after that, since a counting WAF protects nothing.
+  WafRateLimitPer5Min:
+    Type: Number
+    Default: 2000
+    MinValue: 100
+    MaxValue: 2000000000
+    Description: >-
+      Requests per client IP per 5 minutes before the rate rule acts (~6.7/s sustained). Raise it if a partner
+      integration or an office NAT legitimately exceeds it (the WAF log names the IP).
+  FlowLogTrafficType:
+    Type: String
+    Default: ALL
+    AllowedValues: [ALL, REJECT]
+    Description: ALL records accepted and rejected flows (SOC 2 network evidence); REJECT is the cheaper fallback.
   UpgradeDataTypes:
     Type: String
     Default: seed,seed-initial,install,ext-seed,ext,darpan-seed-initial,darpan-seed
@@ -136,8 +176,15 @@ Parameters:
     AllowedValues: [t4g.nano, t4g.micro, t4g.small]
     Description: t4g.nano to start; t4g.micro if large extract downloads drain its network burst.
 
+Mappings:
+  # Elastic Load Balancing's log-delivery account for Regions launched before August 2022 (us-east-2 is one). FindInMap
+  # fails for any other Region, which is the point: this stack lives only in us-east-2.
+  ElbLogDelivery:
+    us-east-2: { AccountId: '033677994240' }
+
 Conditions:
   SchedulerOff: !Equals [!Ref SchedulerEnabled, 'false']
+  WafBlock: !Equals [!Ref WafMode, block]
   HasAllowOrigins: !Not [!Equals [!Ref AllowOrigins, '']]
   HasAnthropicFederation: !Not [!Equals [!Ref AnthropicFederationRuleId, '']]
   HasTask: !Equals [!Ref DesiredCount, 1]
@@ -286,6 +333,7 @@ Resources:
           Session Manager access (no SSH port, no key pair), plus SignalResource on this stack only, because
           cfn-signal signs with the instance role when one is attached and an unauthorised signal stalls the update
     Properties:
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${RoleBoundaryPolicyName}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -469,10 +517,15 @@ Resources:
     Type: AWS::ECR::Repository
     Metadata:
       com.aws.cloudformation.Context:
-        why: images rebuild from darpan-docker-config at a pinned ref; 10 kept so a rollback is one ImageTag change
+        why: >-
+          images rebuild from darpan-docker-config at a pinned ref; 10 kept so a rollback is one ImageTag change.
+          IMMUTABLE (DAR-OPS-018): a tag always means the image that was first pushed under it, so the ImageTag in the
+          stack and the deploy log identify exactly what ran. deploy.sh mints a fresh tag per build
+          (<env>-<ref>-<UTC minute>-<sha7>, never the v0.0.x git tag itself) and a rollback (--tag) pushes nothing
+        must: [no workflow may re-push an existing tag (no latest/prod moving tags); such a push now fails]
     Properties:
       RepositoryName: !Sub '${AWS::StackName}/darpan'
-      ImageTagMutability: MUTABLE
+      ImageTagMutability: IMMUTABLE
       ImageScanningConfiguration:
         ScanOnPush: true
       LifecyclePolicy:
@@ -539,13 +592,20 @@ Resources:
     Type: AWS::RDS::DBParameterGroup
     Metadata:
       com.aws.cloudformation.Context:
-        why: MoquiProductionConf sets pool-maxsize 140; t4g.small's formula default (~150) leaves no headroom for admin sessions
+        why: >-
+          MoquiProductionConf sets pool-maxsize 140; t4g.small's formula default (~150) leaves no headroom for admin
+          sessions. The slow query log (DAR-OPS-018) feeds the slowquery CloudWatch export; all three log settings are
+          dynamic, so they apply without a reboot. No audit log: that needs the MariaDB audit plugin in an option group,
+          which this stack does not have (CloudTrail covers the RDS control plane)
     Properties:
       Description: Darpan MySQL 8.4 (production)
       Family: mysql8.4
       Parameters:
         max_connections: '200'
         require_secure_transport: '1'
+        slow_query_log: '1'
+        long_query_time: '5'
+        log_output: FILE
 
   Database:
     Type: AWS::RDS::DBInstance
@@ -555,7 +615,10 @@ Resources:
       com.aws.cloudformation.Context:
         why: >-
           single-AZ on purpose (an AZ failure means a restore, tens of minutes, accepted for now); deletion
-          protection and a final snapshot because users, configuration and credentials live only here
+          protection and a final snapshot because users, configuration and credentials live only here. Error and slow
+          query logs go to CloudWatch (DAR-OPS-018); RDS creates /aws/rds/instance/<id>/{error,slowquery} itself with
+          no expiry (set 365 days once by hand after the first apply; CloudFormation cannot pre-create them without
+          racing RDS, since the instance id is generated)
         must: [StorageEncrypted, not publicly accessible, DeletionProtection true]
     Properties:
       Engine: mysql
@@ -574,6 +637,7 @@ Resources:
       DBParameterGroupName: !Ref DbParameterGroup
       VPCSecurityGroups: [!Ref DbSecurityGroup]
       BackupRetentionPeriod: !Ref DbBackupRetentionDays
+      EnableCloudwatchLogsExports: [error, slowquery]
       PreferredBackupWindow: '19:00-19:30'
       PreferredMaintenanceWindow: 'sun:20:00-sun:20:30'
       AutoMinorVersionUpgrade: true
@@ -628,6 +692,7 @@ Resources:
   TaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${RoleBoundaryPolicyName}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -654,8 +719,12 @@ Resources:
     Type: AWS::IAM::Role
     Metadata:
       com.aws.cloudformation.Context:
-        why: the app itself needs only EFS (IAM-authorized mount) and ECS Exec for debugging; no other AWS access
+        why: >-
+          the app itself needs only EFS (IAM-authorized mount) and ECS Exec for debugging; no other AWS access. ECS Exec
+          sessions are recorded (DAR-OPS-018): the in-task SSM agent writes each session's transcript to ExecLogGroup
+          with this role, so it needs those log writes (the image must keep `script` and `cat`, which Ubuntu has)
     Properties:
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${RoleBoundaryPolicyName}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -681,6 +750,12 @@ Resources:
                   - ssmmessages:OpenControlChannel
                   - ssmmessages:OpenDataChannel
                 Resource: '*'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:DescribeLogStreams, logs:PutLogEvents]
+                Resource: !GetAtt ExecLogGroup.Arn
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
         # Workload identity federation to Anthropic: the task mints short-lived AWS-signed JWTs for the Claude API
         # (darpan-agent) instead of holding an Anthropic API key. Only that audience, at most one hour; the
         # account has outbound web identity federation enabled, and Anthropic's federation rule matches this role.
@@ -702,19 +777,247 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/ecs/${AWS::StackName}/darpan'
-      RetentionInDays: 30
+      RetentionInDays: !Ref LogRetentionDays
+
+  ExecLogGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: ECS Exec session transcripts (who ran what inside the prod task), DAR-OPS-018
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}/exec'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------- Audit trail (DAR-OPS-018) ----------
+  TrailBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          CloudTrail's own bucket. Object Lock is set at creation (the only time S3 allows it, and CloudFormation
+          supports it for a new bucket), so each log file is undeletable for 365 days in GOVERNANCE mode; the bucket
+          policy also denies deletes and the governance bypass to every principal, so removing evidence first needs a
+          bucket-policy change, which CloudTrail itself records. GOVERNANCE, not COMPLIANCE: compliance mode cannot be
+          lifted even by the account root, so one wrong retention value would be permanent. Files expire at 400 days
+          (365 locked + a margin for a year-end audit). SSE-S3, not KMS: no key policy to keep in step for ~$1/month
+        must:
+          - Object Lock cannot be turned off; dropping it means a new bucket (and trail change)
+          - never in the IAM scope of an app role (the boundary grants no S3 object access)
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-cloudtrail-${AWS::AccountId}'
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention: { Mode: GOVERNANCE, Days: 365 }
+      VersioningConfiguration: { Status: Enabled }
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-after-400-days
+            Status: Enabled
+            ExpirationInDays: 400
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 }
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+          - Id: drop-expired-delete-markers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+
+  TrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CloudTrailAclCheck
+            Effect: Allow
+            Principal: { Service: cloudtrail.amazonaws.com }
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt TrailBucket.Arn
+            Condition:
+              StringEquals: { 'aws:SourceArn': !Sub 'arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AWS::StackName}-trail' }
+          - Sid: CloudTrailWrite
+            Effect: Allow
+            Principal: { Service: cloudtrail.amazonaws.com }
+            Action: s3:PutObject
+            Resource: !Sub '${TrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': bucket-owner-full-control
+                'aws:SourceArn': !Sub 'arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AWS::StackName}-trail'
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt TrailBucket.Arn, !Sub '${TrailBucket.Arn}/*']
+            Condition:
+              Bool: { 'aws:SecureTransport': 'false' }
+          - Sid: NoEvidenceDeletes
+            Effect: Deny
+            Principal: '*'
+            Action: [s3:DeleteObject, s3:DeleteObjectVersion, s3:BypassGovernanceRetention]
+            Resource: !Sub '${TrailBucket.Arn}/*'
+
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: TrailBucketPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          management events (every control-plane call: IAM, ECS, RDS, CloudFormation, Secrets Manager reads) in this
+          Region, with digest files so tampering is detectable. Single-Region on purpose (the new AWS experience allows
+          one Region). The first management-event trail in a Region is free; no data events (per-request cost)
+        must:
+          - IsMultiRegionTrail false
+          - global-service events (IAM, STS, console sign-in) are recorded as us-east-1 events, so this trail may miss
+            some of them; the 90-day Event history still has them. A multi-Region trail is not available here
+    Properties:
+      TrailName: !Sub '${AWS::StackName}-trail'
+      S3BucketName: !Ref TrailBucket
+      IsLogging: true
+      IsMultiRegionTrail: false
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+      EventSelectors:
+        - ReadWriteType: All
+          IncludeManagementEvents: true
+
+  # ---------- VPC flow logs (DAR-OPS-018) ----------
+  FlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/vpc/flowlogs/${AWS::StackName}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  FlowLogsRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: VPC Flow Logs delivers to CloudWatch Logs as this role; it may write the flow log group only
+    Properties:
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${RoleBoundaryPolicyName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: vpc-flow-logs.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+              ArnLike: { 'aws:SourceArn': !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc-flow-log/*' }
+      Policies:
+        - PolicyName: write-flow-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+                Resource: !GetAtt FlowLogGroup.Arn
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
+
+  VpcFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref Vpc
+      ResourceType: VPC
+      TrafficType: !Ref FlowLogTrafficType
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref FlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogsRole.Arn
+      MaxAggregationInterval: 600
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-vpc' }]
+
+  # ---------- ALB access logs (DAR-OPS-018) ----------
+  AlbLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          one line per API request (client IP, path, status, latency, TLS). SSE-S3 because ALB access logs cannot be
+          written under SSE-KMS; retained on stack delete because it is audit evidence
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-alb-logs-${AWS::AccountId}'
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-after-retention
+            Status: Enabled
+            ExpirationInDays: !Ref LogRetentionDays
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+
+  AlbLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          us-east-2 predates August 2022, so ELB delivers as its regional account; the logdelivery service principal is
+          granted too (AWS's newer path) so a switch on AWS's side does not silently stop the logs
+    Properties:
+      Bucket: !Ref AlbLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ElbLogDeliveryAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub
+                - 'arn:aws:iam::${ElbAccountId}:root'
+                - ElbAccountId: !FindInMap [ElbLogDelivery, !Ref 'AWS::Region', AccountId]
+            Action: s3:PutObject
+            Resource: !Sub '${AlbLogsBucket.Arn}/alb/AWSLogs/${AWS::AccountId}/*'
+          - Sid: ElbLogDeliveryService
+            Effect: Allow
+            Principal: { Service: logdelivery.elasticloadbalancing.amazonaws.com }
+            Action: s3:PutObject
+            Resource: !Sub '${AlbLogsBucket.Arn}/alb/AWSLogs/${AWS::AccountId}/*'
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt AlbLogsBucket.Arn, !Sub '${AlbLogsBucket.Arn}/*']
+            Condition:
+              Bool: { 'aws:SecureTransport': 'false' }
 
   # ---------- Load balancer ----------
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: AlbLogsBucketPolicy
     Metadata:
       com.aws.cloudformation.Context:
         why: >-
-          300 s idle timeout because some JSON-RPC calls (run now, transfer apply) take minutes; no access logs (cut).
-          drop_invalid_header_fields stays OFF: an ALB treats any header name with an underscore as invalid, and
+          300 s idle timeout because some JSON-RPC calls (run now, transfer apply) take minutes. Access logs to
+          AlbLogsBucket and deletion protection on (DAR-OPS-018); ELB writes a test object when logging is switched on,
+          so the bucket policy must exist first (DependsOn). drop_invalid_header_fields stays OFF: an ALB treats any header name with an underscore as invalid, and
           Moqui authenticates with login_key / api_key headers (admin CLI + app, header-auth UI, API keys); with it on
           those headers vanish and every call answers "User must be logged in". Desync mitigation stays defensive.
-        must: [routing.http.drop_invalid_header_fields.enabled false while Moqui auth headers contain underscores]
+        must:
+          - routing.http.drop_invalid_header_fields.enabled false while Moqui auth headers contain underscores
+          - deletion protection blocks a stack delete or an ALB replacement; turn it off in its own reviewed change first
     Properties:
       Type: application
       Scheme: internet-facing
@@ -727,6 +1030,14 @@ Resources:
           Value: 'false'
         - Key: routing.http.desync_mitigation_mode
           Value: defensive
+        - Key: deletion_protection.enabled
+          Value: 'true'
+        - Key: access_logs.s3.enabled
+          Value: 'true'
+        - Key: access_logs.s3.bucket
+          Value: !Ref AlbLogsBucket
+        - Key: access_logs.s3.prefix
+          Value: alb
 
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -778,16 +1089,128 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
+  # ---------- Web application firewall (DAR-OPS-018) ----------
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          regional web ACL on the ALB (no CloudFront, so nothing in us-east-1). IP reputation, then a per-IP rate
+          limit, then AWS's known-bad-inputs (Log4Shell, Java deserialization: this is a JVM app) and common rule
+          sets. SizeRestrictions_BODY only COUNTs: it blocks any body over 8 KB, and Darpan legitimately sends far
+          more inside JSON-RPC bodies (the Diff page reads an uploaded CSV/JSON file and posts its text, the JSON
+          Schema wizard posts a whole schema, config transfer posts a whole bundle). The other body rules inspect
+          only the first 8 KB of those bodies (an ALB's fixed inspection limit) and let the rest through
+        must:
+          - SizeRestrictions_BODY stays COUNT while uploads travel inside JSON bodies
+          - health checks bypass the WAF (the ALB probes the target directly), so a WAF mistake shows as client 403s,
+            not as a task replacement; read the WAF log before raising or relaxing anything
+    Properties:
+      Name: !Sub '${AWS::StackName}-alb'
+      Description: Darpan API ALB - managed rule groups and a per-IP rate limit
+      Scope: REGIONAL
+      DefaultAction: { Allow: {} }
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub '${AWS::StackName}-alb'
+      Rules:
+        - Name: aws-ip-reputation
+          Priority: 0
+          OverrideAction: !If [WafBlock, { None: {} }, { Count: {} }]
+          Statement:
+            ManagedRuleGroupStatement: { VendorName: AWS, Name: AWSManagedRulesAmazonIpReputationList }
+          VisibilityConfig: { SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: aws-ip-reputation }
+        - Name: rate-per-ip
+          Priority: 1
+          Action: !If [WafBlock, { Block: {} }, { Count: {} }]
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref WafRateLimitPer5Min
+              AggregateKeyType: IP
+              EvaluationWindowSec: 300
+          VisibilityConfig: { SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: rate-per-ip }
+        - Name: aws-known-bad-inputs
+          Priority: 2
+          OverrideAction: !If [WafBlock, { None: {} }, { Count: {} }]
+          Statement:
+            ManagedRuleGroupStatement: { VendorName: AWS, Name: AWSManagedRulesKnownBadInputsRuleSet }
+          VisibilityConfig: { SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: aws-known-bad-inputs }
+        - Name: aws-common
+          Priority: 3
+          OverrideAction: !If [WafBlock, { None: {} }, { Count: {} }]
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              RuleActionOverrides:
+                - Name: SizeRestrictions_BODY
+                  ActionToUse: { Count: {} }
+          VisibilityConfig: { SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: aws-common }
+
+  WebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: !GetAtt WebAcl.Arn
+
+  WafLogGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: WAF requires the aws-waf-logs- prefix; only blocked and counted requests are kept (see WafLogging)
+    Properties:
+      LogGroupName: !Sub 'aws-waf-logs-${AWS::StackName}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  WafLogging:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          keeps only requests a rule blocked or counted (the evidence for tuning and for incident review), so allowed
+          traffic costs nothing here; ALB access logs already have every request. Moqui's credential headers and the
+          query string are redacted before they are written
+        must: [login_key, api_key, authorization and cookie stay in RedactedFields (they are live credentials)]
+    Properties:
+      ResourceArn: !GetAtt WebAcl.Arn
+      LogDestinationConfigs:
+        - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${WafLogGroup}'
+      RedactedFields:
+        - SingleHeader: { Name: login_key }
+        - SingleHeader: { Name: api_key }
+        - SingleHeader: { Name: authorization }
+        - SingleHeader: { Name: cookie }
+        - QueryString: {}
+      LoggingFilter:
+        DefaultBehavior: DROP
+        Filters:
+          - Behavior: KEEP
+            Requirement: MEETS_ANY
+            Conditions:
+              - ActionCondition: { Action: BLOCK }
+              - ActionCondition: { Action: COUNT }
+              - ActionCondition: { Action: EXCLUDED_AS_COUNT }
+
   # ---------- Compute ----------
   Cluster:
     Type: AWS::ECS::Cluster
     Metadata:
       com.aws.cloudformation.Context:
-        why: Container Insights off (cut); the alarms below read the free AWS/ECS and AWS/ApplicationELB metrics
+        why: >-
+          Container Insights off (cut); the alarms below read the free AWS/ECS and AWS/ApplicationELB metrics. ECS Exec
+          stays on for debugging, and every session's transcript goes to ExecLogGroup (DAR-OPS-018); a task picks the
+          setting up when it starts, so the first deploy or restart after this change turns recording on
     Properties:
       ClusterSettings:
         - Name: containerInsights
           Value: disabled
+      Configuration:
+        ExecuteCommandConfiguration:
+          Logging: OVERRIDE
+          LogConfiguration:
+            CloudWatchLogGroupName: !Ref ExecLogGroup
+            CloudWatchEncryptionEnabled: false
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -1021,6 +1444,74 @@ Resources:
       AlarmActions: [!Ref AlertTopic]
       OKActions: [!Ref AlertTopic]
 
+  DbFreeStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          storage autoscaling grows the volume toward MaxAllocatedStorage, but at most once per 6 hours and never past
+          it; under 2 GiB free for 15 minutes means it is not keeping up or has hit the ceiling (DAR-OPS-018)
+    Properties:
+      AlarmDescription: Darpan MySQL has had under 2 GiB of free storage for 15 minutes
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - { Name: DBInstanceIdentifier, Value: !Ref Database }
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 2147483648
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  DbConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          max_connections is 200 and one task's pool tops out at 140; above 170 for 10 minutes means a leak, a second
+          task, or admin sessions crowding out the app (DAR-OPS-018)
+    Properties:
+      AlarmDescription: Darpan MySQL has held more than 170 connections for 10 minutes (max_connections 200)
+      Namespace: AWS/RDS
+      MetricName: DatabaseConnections
+      Dimensions:
+        - { Name: DBInstanceIdentifier, Value: !Ref Database }
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 170
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  Elb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          5xx the load balancer itself answers (no healthy target, target timeouts or resets), which
+          HTTPCode_Target_5XX_Count never sees. Two 5-minute periods, because a deploy's few minutes with no task
+          answer 503 by design and should not page (DAR-OPS-018)
+    Properties:
+      AlarmDescription: The load balancer answered more than 25 of its own 5xx in each of two consecutive 5-minute periods
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_ELB_5XX_Count
+      Dimensions:
+        - { Name: LoadBalancer, Value: !GetAtt LoadBalancer.LoadBalancerFullName }
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 25
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
   # ---------- Cost guard ----------
   MonthlyBudget:
     Type: AWS::Budgets::Budget
@@ -1057,3 +1548,11 @@ Outputs:
   NatPublicIp:
     Description: The fixed outbound IP every partner call comes from; give this to partners to allowlist
     Value: !Ref NatEip
+  TrailBucketName:
+    Description: CloudTrail log files (Object Lock, 365 days)
+    Value: !Ref TrailBucket
+  AlbLogsBucketName:
+    Description: ALB access logs (prefix alb/)
+    Value: !Ref AlbLogsBucket
+  FlowLogGroupName:
+    Value: !Ref FlowLogGroup

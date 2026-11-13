@@ -28,13 +28,19 @@ Parameters:
     Default: BUILD_GENERAL1_LARGE
     AllowedValues: [BUILD_GENERAL1_SMALL, BUILD_GENERAL1_MEDIUM, BUILD_GENERAL1_LARGE]
     Description: LARGE = 8 vCPU / 16 GB on ARM; the Gradle step wants the memory.
+  LogRetentionDays:
+    Type: Number
+    Default: 365
+    AllowedValues: [90, 180, 365, 400, 545, 731]
+    Description: >-
+      Build log retention (DAR-OPS-018, SOC 2): a year of build history shows which commits went into which image.
 
 Resources:
   BuildLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}'
-      RetentionInDays: 30
+      RetentionInDays: !Ref LogRetentionDays
 
   BuildRole:
     Type: AWS::IAM::Role
