@@ -14,7 +14,7 @@
 #      only ImageTag (plus any --set). It refuses if anything beyond the service/task (and the resources a
 #      --set is expected to touch) would change. Infra changes go through their own reviewed change sets.
 #   4. Without --yes it prints that change set and stops (exit 6). With --yes it executes, waits for the
-#      stack, waits for the ECS service to be stable, and checks <BaseUrl>/Login answers 200.
+#      stack, waits for the ECS service to be stable, and checks <BaseUrl>/ answers 2xx/3xx (the ALB health check: path /, matcher 200-399).
 #   Deploys replace the single task in place (no overlap: Moqui's scheduler runs in-process), so expect
 #   a few minutes of downtime per deploy. Rollback = deploy a previous tag with --tag.
 #
@@ -126,21 +126,21 @@ log "$ENVNAME: account $ACCOUNT, stack $STACK, registry $REGISTRY/$ECR_REPO"
 out() { aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
 service_ids() { CLUSTER=$(out ClusterName); SERVICE=$(out ServiceName); BASE=$(out BaseUrl); }
 
-# After a new task was asked for at epoch-ms $1: service stable, /Login 200, and the boot's data load skipped
+# After a new task was asked for at epoch-ms $1: service stable, / answers 2xx/3xx (as the ALB health check), and the boot's data load skipped
 # no file (Moqui logs "Skipping to next file after error" and carries on, so the app still answers 200).
 verify() {
   local since=$1 code=000 bad
   log "waiting for the ECS service to settle"
   aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE" \
     || die 7 "service not stable; logs: aws logs tail /ecs/$STACK/darpan --since 15m --profile $PROFILE"
-  # /Login from here; when this runner cannot reach the ALB at all (000: its AllowedCidr admits one office IP,
+  # / from here (not /Login: DAR-BE-264 closes /Login with a 404); when this runner cannot reach the ALB at all (000: its AllowedCidr admits one office IP,
   # not a CodeBuild host), the ALB's own health check of the target stands in.
   local tg
   tg=$(aws cloudformation describe-stack-resource --stack-name "$STACK" --logical-resource-id TargetGroup \
         --query StackResourceDetail.PhysicalResourceId --output text 2>/dev/null || true)
   for _ in $(seq 1 40); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/Login" || true)
-    [ "$code" = 200 ] && break
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/" || true)
+    case "$code" in 2??|3??) code=200; break ;; esac
     if [ "$code" = 000 ] && [ -n "$tg" ] && [ "$(aws elbv2 describe-target-health --target-group-arn "$tg" \
          --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' --output text 2>/dev/null)" -ge 1 ] 2>/dev/null; then
       log "$BASE is not reachable from this runner; the ALB reports the target healthy"
@@ -148,12 +148,12 @@ verify() {
     fi
     sleep 15
   done
-  [ "$code" = 200 ] || die 7 "$BASE/Login answered $code after ~10 min; logs: aws logs tail /ecs/$STACK/darpan --since 15m --profile $PROFILE"
+  [ "$code" = 200 ] || die 7 "$BASE/ answered $code after ~10 min; logs: aws logs tail /ecs/$STACK/darpan --since 15m --profile $PROFILE"
   bad=$(aws logs filter-log-events --log-group-name "/ecs/$STACK/darpan" --start-time "$since" \
         --filter-pattern '"Skipping to next file"' --query 'events[].message' --output text 2>/dev/null || true)
   if [ -n "$bad" ] && [ "$bad" != None ]; then
     printf '%s\n' "$bad" | tr '\t' '\n' | grep -o -E 'Error loading entity data from [^ ]+' | sort -u | sed 's/^/    skipped: /' >&2
-    die 7 "$BASE/Login is 200, but the boot's data load skipped the file(s) above (FK order or bad data)"
+    die 7 "$BASE/ answers, but the boot's data load skipped the file(s) above (FK order or bad data)"
   fi
 }
 
@@ -170,7 +170,7 @@ if [ "$RESTART" = 1 ]; then
   aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment >/dev/null
   log "restarting $STACK on $CUR"
   verify "$T0"
-  log "restarted: $STACK runs $CUR; $BASE/Login 200; boot data loaded without skipped files"
+  log "restarted: $STACK runs $CUR; $BASE/ healthy; boot data loaded without skipped files"
   exit 0
 fi
 
@@ -336,4 +336,4 @@ service_ids
 DESIRED=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].desiredCount' --output text)
 if [ "$DESIRED" = 0 ]; then log "deployed $TAG with DesiredCount 0: nothing running to check"; exit 0; fi
 verify "$T0"
-log "deployed: $STACK runs $TAG; $BASE/Login 200; boot data loaded without skipped files"
+log "deployed: $STACK runs $TAG; $BASE/ healthy; boot data loaded without skipped files"
