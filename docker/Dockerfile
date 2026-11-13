@@ -7,9 +7,9 @@
 #    so BASE_IMAGE is a full reference, not a bare tag/digest value. Set
 #    `--build-arg REQUIRE_PINNED_BASE=1` in CI/prod to FAIL the build unless BASE_IMAGE is
 #    digest-pinned. The default names the latest tag for dev convenience.
-#  - W5 #37: GitHub credentials are now BuildKit `--mount=type=secret` (above `RUN`), so they
-#    NEVER land in an image layer. ARG GIT_USERNAME/GIT_PASSWORD remain for backward compat
-#    during the rollout window; once CI is on `--secret id=netrc,...` they can be dropped.
+#  - W5 #37 / DAR-OPS-004: every cloned repo is public, so no credential is needed. The GIT_USERNAME /
+#    GIT_PASSWORD build-arg fallback is gone; an optional BuildKit `--secret id=netrc` still works for a
+#    private fork override and never lands in an image layer.
 #  - W5 #38: Moqui framework / runtime / sftp refs are pinned in-file to stable immutable refs
 #    matching the dev baseline (see the ARG block); no build-arg override is required. Product
 #    components (darpan / darpan-hotwax / shopify-darpan / netsuite-darpan / database-darpan / darpan-agent) default
@@ -20,7 +20,11 @@ ARG BASE_IMAGE=public.ecr.aws/j6s7y7u4/hotwax/ubuntu:22.04
 # framework's Gradle 9 (refuses to RUN on < JVM 17), and Spark 4.2 all require JDK 21. Copy a
 # self-contained Temurin 21 (Ubuntu/glibc — ABI-compatible with the 22.04 base) instead of depending
 # on the base image's apt sources. eclipse-temurin:21-jdk is the same JDK image docker/simple uses.
-FROM eclipse-temurin:21-jdk AS jdk21
+# DAR-OPS-004: pinned by digest (the multi-arch index: arm64 for Darpan's builds, amd64 elsewhere). Resolved
+# 2026-11-13 = Temurin 21.0.13+9, the JDK the running prod image already had; the tag now builds on Ubuntu 26.04
+# but the JDK tree is self-contained and was checked running on the 22.04 base. Move it on purpose:
+#   docker buildx imagetools inspect eclipse-temurin:21-jdk   (the top-level Digest)
+FROM eclipse-temurin:21-jdk@sha256:0a3f329821dcadf54b2a3033a15e2e9f007069a9db43d7f51897e6b80e726b07 AS jdk21
 
 FROM ${BASE_IMAGE}
 
@@ -36,8 +40,6 @@ RUN set -e; \
         exit 1; \
     fi
 
-ARG GIT_USERNAME=
-ARG GIT_PASSWORD=
 # moqui-framework: pinned to the drpn-ai FORK, branch master. That branch is upstream v4.0.0 +
 # PR #705 (embed-bitronix), the merge this stack requires, since Bitronix is the default JTA TM and
 # moqui-atomikos is retired — PLUS the login self-deadlock fix, merged to the fork's mainline as
@@ -48,15 +50,17 @@ ARG GIT_PASSWORD=
 # tag predates that merge by 6 commits).
 #
 # Why the fork's master and not a tag: the RUN below does
-# `git fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF"`, which needs a ref the remote can resolve, and
-# a raw SHA is not fetchable by default. This replaced tag v4.0.0-drpn.1 on 2026-08-18 — that tag
+# `git fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF"`, which needs a ref the remote can resolve. GitHub
+# serves a FULL 40-character commit SHA that way (checked 2026-11-13); an abbreviated one fails with
+# "couldn't find remote ref". This replaced tag v4.0.0-drpn.1 on 2026-08-18 — that tag
 # dereferences to c618faf1 and so PREDATES the getLoginKey fix; anything still pinned to it ships
 # the deadlock.
 #
 # TRADE-OFF, and it is a real one: master MOVES. This build is no longer reproducible — a rebuild
 # later resolves to whatever the fork's master is at that moment, including upstream commits merged
 # in since, and a force-push to the fork is followed silently. For a byte-identical rebuild, pass an
-# immutable SHA: `--build-arg MOQUI_FRAMEWORK_REF=8cde954b` (the merge that carried the fix).
+# immutable full SHA: `--build-arg MOQUI_FRAMEWORK_REF=<40-char sha>` (8cde954b, the merge that carried
+# the fix, or any later master commit; the short form will not fetch).
 #
 # RETIREMENT: when the fix is merged upstream, repoint this ARG, docker/prod/Dockerfile, and the
 # darpan component's .github/workflows/ci.yml framework clone at an upstream ref that contains it,
@@ -84,19 +88,16 @@ ARG MOQUI_GQL_REF=main
 
 WORKDIR /
 
-# Audit W5 #37 — credentials live ONLY for the duration of this RUN, mounted from BuildKit's
-# secret store at /run/secrets/netrc. The earlier `echo $GIT_PASSWORD >> /root/.netrc` pattern
-# preserved the credential in image layer history (recoverable via `docker history --no-trunc`).
-# Backward-compat fallback writes the netrc from the legacy ARGs IF the BuildKit secret is absent,
-# all collapsed into a single RUN so the credential file is removed in the same layer.
+# Every repo below is public (DAR-OPS-004), so the clones need no credential. The optional BuildKit secret
+# (`--secret id=netrc,src=<file>`) is only for a private fork override; it lives for this RUN alone and the
+# file is removed in the same layer (never a build arg: those persist in `docker history`). aws/deploy.sh
+# also anchors its cache-bust ARG on this mount line.
 RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
     set -e; \
     if [ -s /root/.netrc.secret ]; then \
         cp /root/.netrc.secret /root/.netrc; \
-    else \
-        printf 'machine github.com\nlogin %s\npassword %s\n' "$GIT_USERNAME" "$GIT_PASSWORD" > /root/.netrc; \
+        chmod 600 /root/.netrc; \
     fi; \
-    chmod 600 /root/.netrc; \
     git init /moqui-framework && git -C /moqui-framework remote add origin https://github.com/drpn-ai/moqui-framework.git && git -C /moqui-framework fetch --depth 1 origin "$MOQUI_FRAMEWORK_REF" && git -C /moqui-framework checkout --detach FETCH_HEAD; \
     git clone --depth 1 -b "$MOQUI_RUNTIME_REF"   https://github.com/moqui/moqui-runtime.git    /moqui-framework/runtime; \
     git clone --depth 1 -b "$MOQUI_SFTP_REF"      https://github.com/moqui/moqui-sftp.git       /moqui-framework/runtime/component/moqui-sftp; \

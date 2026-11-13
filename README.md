@@ -27,8 +27,13 @@ work against this repo without per-job path overrides.
 - Config files (`MoquiProductionConf.xml`, `buildGradle.patch`, entrypoints, `log4j2-json.xml`) are
   COPY'd from this repo's build context. They are NOT taken from the cloned darpan component — its
   embedded `docker/` directory was removed 2026-07-04 (`drpn-ai/darpan` 1af89e7).
-- CI/prod builds MUST digest-pin the base image: `--build-arg BASE_IMAGE=maarg-base-os@sha256:<d>` and `--build-arg REQUIRE_PINNED_BASE=1`.
-- GitHub credentials go in via BuildKit secrets (`--secret id=netrc,...`), never build args. The `GIT_USERNAME`/`GIT_PASSWORD` build args still exist as a fallback; do not use them.
+- The prod Dockerfile refuses an unpinned base (`REQUIRE_PINNED_BASE` defaults to `1`): pass
+  `--build-arg BASE_IMAGE=maarg-base-os@sha256:<d>` (or `darpan-base:22.04`, which Darpan's AWS builds make
+  from the digest-pinned `aws/base.Dockerfile`), or opt out with `--build-arg REQUIRE_PINNED_BASE=`. Both
+  Dockerfiles pin the `eclipse-temurin:21-jdk` stage by digest.
+- Every cloned repo is public, so builds need no GitHub credential. The `GIT_USERNAME`/`GIT_PASSWORD` build
+  args are gone (an unused `--build-arg` only warns). A private fork override can still pass
+  `--secret id=netrc,src=<file>`; never a build arg.
 - `.env.local` holds real secrets (JWT key, DB credentials) and is git-ignored — copy `.env.local.example` and fill it in locally.
 
 ## Component pins
