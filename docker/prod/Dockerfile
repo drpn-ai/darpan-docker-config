@@ -297,7 +297,7 @@ ENV Moqui_DB_NAME=
 # app[-uat].drpn.ai nobody signs in from) are gone. Steve Madden's instance builds from this file too, but its UI
 # (sm-darpan.hotwax.io) was never on this list: its backend uses header auth behind an ingress that sets CORS itself.
 # A deployment that needs another origin sets Moqui_WEBAPP_ALLOW_ORIGINS (the prod stack's AllowOrigins parameter).
-ENV Moqui_WEBAPP_ALLOW_ORIGINS="app-uat.drpn.ai,app.drpn.ai"
+ENV Moqui_WEBAPP_ALLOW_ORIGINS="app.drpn.ai"
 ENV WEBAPP_ALLOW_ORIGINS=
 ENV ELASTICSEARCH_HOST=
 ENV TIME_ZONE=

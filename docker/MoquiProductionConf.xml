@@ -2,7 +2,7 @@
 
     <!-- DAR-OPS-019: Darpan's own app origins only (retired HotWax origins removed). Each image's
          Moqui_WEBAPP_ALLOW_ORIGINS env replaces this at boot (docker/entrypoint.sh, docker/prod/entrypoint.sh). -->
-    <default-property name="webapp_allow_origins" value="app-uat.drpn.ai,app.drpn.ai"/>
+    <default-property name="webapp_allow_origins" value="app.drpn.ai"/>
     <!-- Pages that may call the public GraphQL API (moqui-gql webapp_public_api_paths) from a browser, never with
          credentials: the developers.drpn.ai API explorer. Not in webapp_allow_origins, which grants credentialed
          CORS to every path. Override with the webapp_public_api_origins env var. -->

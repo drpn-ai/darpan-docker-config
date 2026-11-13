@@ -136,7 +136,7 @@ Parameters:
     Type: String
     Default: ''
     Description: >-
-      Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (app.drpn.ai, app-uat.drpn.ai). Set
+      Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (app.drpn.ai only; UAT UI code never gets signed-in calls to prod). Set
       it during the rehearsal only, e.g. to add a local darpan-ui origin.
   AgentEnabled:
     Type: String
