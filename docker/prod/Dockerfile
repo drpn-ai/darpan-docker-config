@@ -77,7 +77,13 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v3.0.3
+ARG DARPAN_REF=v3.1.0
+# darpan v3.1.0 (minor, facade contract 4 unchanged) moves EVERY component pin below: two-factor sign-in and passkeys
+# (DAR-BE-264/270), tenant users run and connect (DAR-BE-292: darpan-hotwax v1.1.0, shopify-darpan v0.10.0,
+# database-darpan v0.4.0, darpan-agent v0.2.0), the outbound HTTP client every connector sends through (DAR-BE-262:
+# darpan-hotwax, shopify-darpan), the open NetSuite line judged by its own HotWax ship group (DAR-BE-294:
+# darpan-hotwax + netsuite-darpan v0.6.0), Shopify app install and privacy webhooks (DAR-BE-272/273/275) and
+# GraphQL API key lifetimes (moqui-gql v1.1.0, DAR-BE-267/282).
 # darpan v2.1.12 moves alone: an audit can play the month that just ended (DAR-BE-178).
 # darpan v3.0.2 (hotfix on 3.0; no darpan v3.0.1: that number is docker-config's agent-only hotfix) moves
 # darpan-hotwax v1.0.1, shopify-darpan v0.9.1, netsuite-darpan v0.5.1 and darpan-agent v0.1.2 with it: the NetSuite ->
@@ -138,9 +144,9 @@ ARG DARPAN_REF=v3.0.3
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
 # darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
-ARG DARPAN_HOTWAX_REF=v1.0.1
-ARG SHOPIFY_DARPAN_REF=v0.9.1
-ARG NETSUITE_DARPAN_REF=v0.5.1
+ARG DARPAN_HOTWAX_REF=v1.1.0
+ARG SHOPIFY_DARPAN_REF=v0.10.0
+ARG NETSUITE_DARPAN_REF=v0.6.0
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
@@ -150,13 +156,13 @@ ARG NETSUITE_DARPAN_REF=v0.5.1
 # darpan v2.1.0; it compiles against it unchanged.
 # v0.2.2 (darpan v2.1.1): another tenant's database source answers exactly like a missing one (DAR-BE-135).
 # No commits for darpan v2.1.2; it compiles against it unchanged.
-ARG DATABASE_DARPAN_REF=v0.3.0
+ARG DATABASE_DARPAN_REF=v0.4.0
 # moqui-gql v0.1.0 (first tag, with darpan v2.1.0): darpan 2.1's audit report, finding and findings roots
 # need it, and the report it serves has no extendedThru. Moves with DARPAN_REF.
 # v0.1.1 (darpan v2.1.1): tenant admins mint API keys for their own tenant (DAR-BE-136); public API
 # paths refuse cookies (DAR-DOCS-005).
 # No commits for darpan v2.1.2; v0.1.1 serves it unchanged.
-ARG MOQUI_GQL_REF=v1.0.0
+ARG MOQUI_GQL_REF=v1.1.0
 # darpan-agent (DAR-BE-159): the embedded Claude agent. Off unless DARPAN_AGENT_ENABLED=true AND a tenant has
 # agentEnabled=Y; it reads ANTHROPIC_API_KEY from the container env at run time (never baked into the image). Like
 # moqui-gql it compileOnly-depends on darpan, so it is built by its own jar task below.
@@ -165,7 +171,7 @@ ARG MOQUI_GQL_REF=v1.0.0
 # v0.1.1 (DAR-BE-244): with no key, the agent authenticates by AWS workload identity federation (adds the AWS SDK
 # sts module, URLConnection client only). Pairs with darpan v3.0.0 unchanged.
 # v0.1.2 (darpan v3.0.2): write#AuditRunWords, Claude Haiku's headline and fix lines for the run update (DAR-BE-207).
-ARG DARPAN_AGENT_REF=v0.1.2
+ARG DARPAN_AGENT_REF=v0.2.0
 
 WORKDIR /
 
