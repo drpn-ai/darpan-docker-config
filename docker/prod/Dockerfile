@@ -77,13 +77,12 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v3.1.0
-# darpan v3.1.0 (minor, facade contract 4 unchanged) moves EVERY component pin below: two-factor sign-in and passkeys
-# (DAR-BE-264/270), tenant users run and connect (DAR-BE-292: darpan-hotwax v1.1.0, shopify-darpan v0.10.0,
-# database-darpan v0.4.0, darpan-agent v0.2.0), the outbound HTTP client every connector sends through (DAR-BE-262:
-# darpan-hotwax, shopify-darpan), the open NetSuite line judged by its own HotWax ship group (DAR-BE-294:
-# darpan-hotwax + netsuite-darpan v0.6.0), Shopify app install and privacy webhooks (DAR-BE-272/273/275) and
-# GraphQL API key lifetimes (moqui-gql v1.1.0, DAR-BE-267/282).
+ARG DARPAN_REF=v3.2.0
+# darpan v3.2.0 (minor, facade contract 4: two methods added) moves three pins below: darpan (admin CLI browser
+# sign-in DAR-BE-295, Darpan admin role DAR-BE-296, two-factor for everyone + reminders DAR-BE-297, passkey-only
+# sign-in DAR-BE-301, themed emails DAR-BE-298), darpan-hotwax v1.2.0 (exchange orders in itemQuantity, DAR-BE-300)
+# and darpan-agent v0.3.0 (write#EmailSmile, DAR-BE-298). shopify-darpan, netsuite-darpan, database-darpan and
+# moqui-gql have no commits since 3.1.0 and keep their 3.1.0 tags.
 # darpan v2.1.12 moves alone: an audit can play the month that just ended (DAR-BE-178).
 # darpan v3.0.2 (hotfix on 3.0; no darpan v3.0.1: that number is docker-config's agent-only hotfix) moves
 # darpan-hotwax v1.0.1, shopify-darpan v0.9.1, netsuite-darpan v0.5.1 and darpan-agent v0.1.2 with it: the NetSuite ->
@@ -144,7 +143,7 @@ ARG DARPAN_REF=v3.1.0
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
 # darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
-ARG DARPAN_HOTWAX_REF=v1.1.0
+ARG DARPAN_HOTWAX_REF=v1.2.0
 ARG SHOPIFY_DARPAN_REF=v0.10.0
 ARG NETSUITE_DARPAN_REF=v0.6.0
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
@@ -171,7 +170,7 @@ ARG MOQUI_GQL_REF=v1.1.0
 # v0.1.1 (DAR-BE-244): with no key, the agent authenticates by AWS workload identity federation (adds the AWS SDK
 # sts module, URLConnection client only). Pairs with darpan v3.0.0 unchanged.
 # v0.1.2 (darpan v3.0.2): write#AuditRunWords, Claude Haiku's headline and fix lines for the run update (DAR-BE-207).
-ARG DARPAN_AGENT_REF=v0.2.0
+ARG DARPAN_AGENT_REF=v0.3.0
 
 WORKDIR /
 
