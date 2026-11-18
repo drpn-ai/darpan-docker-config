@@ -77,7 +77,9 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v3.2.0
+ARG DARPAN_REF=v3.2.1
+# darpan v3.2.1 (hotfix: the two-factor policy guard needs the setter's second way back in, DAR-BE-302) moves only
+# DARPAN_REF; the 3.2.0 note stands for the rest.
 # darpan v3.2.0 (minor, facade contract 4: two methods added) moves three pins below: darpan (admin CLI browser
 # sign-in DAR-BE-295, Darpan admin role DAR-BE-296, two-factor for everyone + reminders DAR-BE-297, passkey-only
 # sign-in DAR-BE-301, themed emails DAR-BE-298), darpan-hotwax v1.2.0 (exchange orders in itemQuantity, DAR-BE-300)
