@@ -77,7 +77,12 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v3.2.1
+ARG DARPAN_REF=v3.3.0
+# darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
+# agent's config are edited in production, DAR-BE-303..307/313/315) moves DARPAN_AGENT_REF to v0.4.0 with it: the agent
+# calls core DarpanSettings, AgentConfig and AdminAuditSupport, and darpan's contract reads the agent's admin services,
+# so neither tag builds a valid image with the other's previous tag. darpan-hotwax, shopify-darpan, netsuite-darpan,
+# database-darpan and moqui-gql have no commits since 3.2.1 and keep their tags.
 # darpan v3.2.1 (hotfix: the two-factor policy guard needs the setter's second way back in, DAR-BE-302) moves only
 # DARPAN_REF; the 3.2.0 note stands for the rest.
 # darpan v3.2.0 (minor, facade contract 4: two methods added) moves three pins below: darpan (admin CLI browser
@@ -172,7 +177,9 @@ ARG MOQUI_GQL_REF=v1.1.0
 # v0.1.1 (DAR-BE-244): with no key, the agent authenticates by AWS workload identity federation (adds the AWS SDK
 # sts module, URLConnection client only). Pairs with darpan v3.0.0 unchanged.
 # v0.1.2 (darpan v3.0.2): write#AuditRunWords, Claude Haiku's headline and fix lines for the run update (DAR-BE-207).
-ARG DARPAN_AGENT_REF=v0.3.0
+# v0.4.0 (darpan v3.3.0): the agent's prompts, role models, prices, texts and per-tenant caps are data, and its budgets,
+# timeouts and thresholds are settings (DAR-BE-307, DAR-BE-304). Moves with DARPAN_REF.
+ARG DARPAN_AGENT_REF=v0.4.0
 
 WORKDIR /
 
