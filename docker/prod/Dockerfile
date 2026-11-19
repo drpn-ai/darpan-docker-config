@@ -1,4 +1,10 @@
 # syntax=docker/dockerfile:1.6
+# STEVE MADDEN / HOTWAX JENKINS VARIANT (sm-v* tags only; never merged to main). Same recipe and pins as the
+# darpan release tag it is cut from, with HotWax's Jenkins and Kubernetes posture of the 2.1.x images (Aditi
+# 2026-11-19: "the SM docker file needs to be JENKINS compatible like the 2.1.x files"): REQUIRE_PINNED_BASE off by
+# default (Jenkins builds from the maarg-base-os tag), the container runs as root (SM's Kubernetes volumes are
+# root-owned and its pod sets no fsGroup), and the baked allowed origins are SM's app. Jenkins' GIT_USERNAME /
+# GIT_PASSWORD build args are unused (every repo is public) and only warn.
 #
 # Audit Wave 5 hardening (mirrors ../Dockerfile):
 #  - W5 #36 / 2026-06-11 #24: BASE_IMAGE default still names the latest tag for compatibility; CI/prod
@@ -30,7 +36,7 @@ FROM eclipse-temurin:21-jdk@sha256:0a3f329821dcadf54b2a3033a15e2e9f007069a9db43d
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
-ARG REQUIRE_PINNED_BASE=1
+ARG REQUIRE_PINNED_BASE=
 RUN set -e; \
     if [ -n "$REQUIRE_PINNED_BASE" ]; then \
         case "$BASE_IMAGE" in \
@@ -313,7 +319,7 @@ ENV Moqui_DB_NAME=
 # app[-uat].drpn.ai nobody signs in from) are gone. Steve Madden's instance builds from this file too, but its UI
 # (sm-darpan.hotwax.io) was never on this list: its backend uses header auth behind an ingress that sets CORS itself.
 # A deployment that needs another origin sets Moqui_WEBAPP_ALLOW_ORIGINS (the prod stack's AllowOrigins parameter).
-ENV Moqui_WEBAPP_ALLOW_ORIGINS="app.drpn.ai"
+ENV Moqui_WEBAPP_ALLOW_ORIGINS="sm-darpan.hotwax.io,sm-darpan.web.app,sm-darpan.firebaseapp.com"
 ENV WEBAPP_ALLOW_ORIGINS=
 ENV ELASTICSEARCH_HOST=
 ENV TIME_ZONE=
@@ -341,7 +347,7 @@ RUN set -e; \
     getent passwd 1000 >/dev/null || useradd --uid 1000 --gid 1000 --create-home --home-dir /home/moqui --shell /usr/sbin/nologin moqui; \
     bad=$(find /moqui-framework /moqui-deploy \( ! -user 1000 -o ! -group 1000 \) -print -quit); \
     if [ -n "$bad" ]; then echo "ERROR: $bad is not owned by 1000:1000; set ownership in the step that creates it" >&2; exit 1; fi
-USER 1000:1000
+# SM variant: no USER line, the container runs as root like the 2.1.x images (see the header).
 
 EXPOSE 8080
 
