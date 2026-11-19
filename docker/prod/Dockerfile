@@ -77,7 +77,9 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v3.3.0
+ARG DARPAN_REF=v3.3.1
+# darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
+# moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
 # agent's config are edited in production, DAR-BE-303..307/313/315) moves DARPAN_AGENT_REF to v0.4.0 with it: the agent
 # calls core DarpanSettings, AgentConfig and AdminAuditSupport, and darpan's contract reads the agent's admin services,
