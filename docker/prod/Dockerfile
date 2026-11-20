@@ -279,44 +279,24 @@ RUN --mount=type=cache,id=darpan-gradle-prod,target=/gradle-cache,sharing=locked
 WORKDIR /moqui-deploy
 COPY --chown=1000:1000 docker/prod/entrypoint.sh /moqui-deploy/entrypoint.sh
 # P1 Observability: copy the JSON log4j2 config so the prod JVM emits structured JSON to STDOUT.
-# Activated below via -Dlog4j2.configurationFile. Local dev-stack.sh does NOT set this property
+# entrypoint.sh activates it with -Dlog4j2.configurationFile. Local dev-stack.sh does NOT set this property
 # so developers keep the readable PatternLayout.
 COPY --chown=1000:1000 docker/log4j2-json.xml /moqui-deploy/log4j2-json.xml
 
 RUN chmod +x entrypoint.sh
 RUN jar -xvf /moqui-framework/moqui-plus-runtime.war && chown -R 1000:1000 /moqui-deploy
 
-# DB_LOAD is the ops-runbook command for a first-time full DB load (entrypoint.sh does NOT run it).
-# darpan-seed-initial/darpan-seed must be INSIDE -Ptypes — loadProduction only forwards -Ptypes; a
-# -Praw flag is read by no gradle task (silent no-op). Loader flags go as MoquiStart args instead,
-# e.g.: java -jar moqui-plus-runtime.war load conf=$CONF_FILE types=darpan-seed dummy-fks
-ENV DB_LOAD="./gradlew loadProduction -Ptypes=seed,seed-initial,install,ext-seed,ext,darpan-seed-initial,darpan-seed"
-# Audit 2026-06-27 MACH P1 #1: replaced hardcoded -Xms512m/-Xmx4096m with cgroup-aware JDK 21
-# container support. JDK 21 respects cgroup v1/v2 memory limits by default (UseContainerSupport=true).
-# -XX:MaxRAMPercentage=75.0 caps the heap at 75 % of the container's cgroup limit (leaves headroom for
-# Metaspace, thread stacks, NIO direct buffers, and the OS). -XX:InitialRAMPercentage=25.0 avoids
-# over-eager reservation at start. Override the entire JAVA_OPTS env var at runtime to change these.
-# P1 Observability: -Dlog4j2.configurationFile activates the JSON STDOUT layout (log4j2-json.xml).
-# This overrides the upstream framework PatternLayout for prod without touching the upstream file.
-# The path is absolute inside the extracted WAR directory (/moqui-deploy).
-ENV JAVA_OPTS="-XX:InitialRAMPercentage=25.0 -XX:MaxRAMPercentage=75.0 -XX:MaxHeapSize=6g -Dlog4j2.configurationFile=/moqui-deploy/log4j2-json.xml"
-ENV CONF_FILE="/moqui-framework/runtime/conf/MoquiProductionConf.xml"
-ENV SLEEP="sleep 2"
-ENV JWT_KEY=
-ENV MOQUI_HOST=
-ENV Moqui_DB_HOST=
-ENV Moqui_DB_USER=
-ENV Moqui_DB_PASSWORD=
-ENV Moqui_DB_NAME=
-# DAR-OPS-019: Darpan's own app origins only. The retired HotWax-hosted UIs (*.hotwax.io), HotWax's dev Firebase
-# project and the Firebase default domains of Darpan's own sites (hc-darpan[-uat].web.app/.firebaseapp.com, aliases of
-# app[-uat].drpn.ai nobody signs in from) are gone. Steve Madden's instance builds from this file too, but its UI
-# (sm-darpan.hotwax.io) was never on this list: its backend uses header auth behind an ingress that sets CORS itself.
-# A deployment that needs another origin sets Moqui_WEBAPP_ALLOW_ORIGINS (the prod stack's AllowOrigins parameter).
-ENV Moqui_WEBAPP_ALLOW_ORIGINS="app.drpn.ai"
-ENV WEBAPP_ALLOW_ORIGINS=
-ENV ELASTICSEARCH_HOST=
-ENV TIME_ZONE=
+# DAR-OPS-021: no deployment configuration lives in this image. Every runtime value comes from the container
+# environment (Darpan prod: the task's Environment and Secrets in aws/darpan-prod.yaml). Do not add ENV lines for
+# deployment values here; the only ENVs above are the image's own toolchain (JAVA_HOME, PATH, GRADLE_USER_HOME).
+#   required (entrypoint.sh fails fast): Moqui_DB_HOST, Moqui_DB_USER, Moqui_DB_PASSWORD, Moqui_DB_NAME,
+#                                        entity_ds_crypt_pass, JWT_KEY, JAVA_OPTS
+#   optional: Moqui_HOST, TIME_ZONE, Moqui_WEBAPP_ALLOW_ORIGINS (unset keeps MoquiProductionConf.xml's app.drpn.ai),
+#             entity_ds_crypt_pass_old, DARPAN_LOAD_UPGRADE_DATA, DARPAN_UPGRADE_DATA_*, DARPAN_APP_BASE_URL,
+#             DARPAN_AGENT_ENABLED, ANTHROPIC_*, scheduled_job_check_time
+# First-time full DB load (ops runbook; the entrypoint never runs it). darpan-seed-initial/darpan-seed must be INSIDE
+# -Ptypes: loadProduction forwards only -Ptypes.
+#   ./gradlew loadProduction -Ptypes=seed,seed-initial,install,ext-seed,ext,darpan-seed-initial,darpan-seed
 
 # Audit 2026-06-26 MACH P0 #1: guarantee the healthcheck probe tool exists regardless of base-image
 # contents (idempotent — no-op when curl is already present).

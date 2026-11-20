@@ -67,7 +67,7 @@ Parameters:
     Type: String
     Default: '8192'
     AllowedValues: ['8192', '16384']
-    Description: Heap is 75% of this, capped at 6 GB by the image's JAVA_OPTS, so more than 8 GB buys little.
+    Description: Heap is 75% of this, capped at 6 GB by the task's JAVA_OPTS, so more than 8 GB buys little.
   DbInstanceClass:
     Type: String
     Default: db.t4g.small
@@ -136,7 +136,7 @@ Parameters:
     Type: String
     Default: ''
     Description: >-
-      Overrides Moqui_WEBAPP_ALLOW_ORIGINS. Empty keeps the prod image's own list (app.drpn.ai only; UAT UI code never gets signed-in calls to prod). Set
+      Sets Moqui_WEBAPP_ALLOW_ORIGINS on the task. Empty sends app.drpn.ai only (UAT UI code never gets signed-in calls to prod). Set
       it during the rehearsal only, e.g. to add a local darpan-ui origin.
   AgentEnabled:
     Type: String
@@ -1268,6 +1268,9 @@ Resources:
             - { Name: Moqui_DB_NAME, Value: darpan }
             - { Name: Moqui_HOST, Value: !Ref HostName }
             - { Name: TIME_ZONE, Value: !Ref TimeZone }
+            # DAR-OPS-021: the image bakes no runtime config; heap is 75% of TaskMemory, capped at 6 GB. Required by the entrypoint.
+            - { Name: JAVA_OPTS, Value: '-XX:InitialRAMPercentage=25.0 -XX:MaxRAMPercentage=75.0 -XX:MaxHeapSize=6g' }
+            - { Name: Moqui_WEBAPP_ALLOW_ORIGINS, Value: !If [HasAllowOrigins, !Ref AllowOrigins, app.drpn.ai] }
             - { Name: DARPAN_LOAD_UPGRADE_DATA, Value: 'Y' }
             - { Name: DARPAN_UPGRADE_DATA_TYPES, Value: !Ref UpgradeDataTypes }
             - { Name: DARPAN_APP_BASE_URL, Value: !Ref AppBaseUrl }
@@ -1284,10 +1287,6 @@ Resources:
             - !If
               - SchedulerOff
               - { Name: scheduled_job_check_time, Value: '0' }
-              - !Ref AWS::NoValue
-            - !If
-              - HasAllowOrigins
-              - { Name: Moqui_WEBAPP_ALLOW_ORIGINS, Value: !Ref AllowOrigins }
               - !Ref AWS::NoValue
           Secrets:
             - { Name: Moqui_DB_USER, ValueFrom: !Sub '${DbMasterSecret}:username::' }

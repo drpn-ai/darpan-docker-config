@@ -15,6 +15,9 @@ set -e
 : "${Moqui_DB_NAME:?Moqui_DB_NAME must be set for production}"
 : "${entity_ds_crypt_pass:?entity_ds_crypt_pass must be set to a deployment-unique secret}"
 : "${JWT_KEY:?JWT_KEY must be set to a strong, deployment-unique signing secret}"
+# DAR-OPS-021: the image carries no JVM sizing. Without JAVA_OPTS the JVM would silently take its 25 % heap default.
+# Prod sends e.g. "-XX:InitialRAMPercentage=25.0 -XX:MaxRAMPercentage=75.0 -XX:MaxHeapSize=6g" (aws/darpan-prod.yaml).
+: "${JAVA_OPTS:?JAVA_OPTS must be set (heap sizing, e.g. -XX:MaxRAMPercentage=75.0)}"
 export entity_ds_crypt_pass
 # MACH Security P1 (crypt-key rotation): entity_ds_crypt_pass_old is OPTIONAL — only set during a
 # rotation window. When unset, MoquiProductionConf.xml defaults it to entity_ds_crypt_pass so the
@@ -23,6 +26,11 @@ export entity_ds_crypt_pass
 export entity_ds_crypt_pass_old="${entity_ds_crypt_pass_old:-$entity_ds_crypt_pass}"
 # Export JWT_KEY so Moqui's ${JWT_KEY} placeholder in MoquiProductionConf.xml resolves at runtime.
 export JWT_KEY
+
+# Paths inside this image, not deployment settings.
+CONF_FILE=/moqui-framework/runtime/conf/MoquiProductionConf.xml
+# P1 Observability: structured JSON logs to STDOUT (log4j2-json.xml is copied in by the Dockerfile).
+LOG4J2_JSON=-Dlog4j2.configurationFile=/moqui-deploy/log4j2-json.xml
 
 # Fix 2026-06-29: switched from '/' delimiter + '$VAR' single-quote splicing to '|' delimiter +
 # double-quoted expansion so credentials containing '/' or "'" (common from secrets managers)
@@ -80,8 +88,6 @@ export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }\
 -Dio.netty.allocator.type=pooled \
 -XX:+EnableDynamicAgentLoading \
 --enable-native-access=ALL-UNNAMED"
-
-$SLEEP
 
 # MACH P1 Item 3 — build / release / run separation (12-factor principle):
 #
@@ -151,4 +157,4 @@ fi
 # in-flight reconciliation XA transactions lost) and any container restart policy was structurally
 # unreachable. Moqui already streams logs to container stdout via the log4j2 STDOUT console appender,
 # so the explicit tail is no longer required.
-exec java $JAVA_OPTS -cp . MoquiStart port=8080 conf=$CONF_FILE
+exec java $JAVA_OPTS "$LOG4J2_JSON" -cp . MoquiStart port=8080 conf="$CONF_FILE"
