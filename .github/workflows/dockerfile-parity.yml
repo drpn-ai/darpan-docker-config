@@ -1,0 +1,23 @@
+name: Dockerfile parity
+
+# DAR-BE-318: docker/Dockerfile (UAT) and docker/prod/Dockerfile must clone the same components and
+# build the same component jars. A component in one file only reaches prod as a broken image
+# (database-darpan before 1.5.0, moqui-rules in DAR-BE-318). Lint only: no image is built.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: UAT and prod Dockerfiles carry the same components
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Compare component sets
+        run: docker/check-dockerfile-parity.sh

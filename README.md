@@ -46,23 +46,19 @@ components to release tags. Values below are the `ARG` defaults in each file.
 | moqui-framework | `drpn-ai/moqui-framework` (fork) | `master` | `master` (moves; pass `MOQUI_FRAMEWORK_REF=<sha>` for a reproducible build) |
 | moqui-runtime | `moqui/moqui-runtime` | `v3.9.9` | `v3.9.9` |
 | moqui-sftp | `moqui/moqui-sftp` | `v1.0.3` | `v1.0.3` |
-| darpan | `drpn-ai/darpan` | `main` | `v2.1.2` |
-| darpan-hotwax | `drpn-ai/darpan-hotwax` | `main` | `v0.10.2` |
-| shopify-darpan | `drpn-ai/shopify-darpan` | `main` | `v0.8.2` |
-| netsuite-darpan | `drpn-ai/netsuite-darpan` | `main` | `v0.4.2` |
-| database-darpan | `drpn-ai/database-darpan` | `main` | `v0.2.2` |
-| moqui-gql | `drpn-ai/moqui-gql` | `main` | `v0.1.1` |
+| darpan | `drpn-ai/darpan` | `main` | `v3.3.2` |
+| darpan-hotwax | `drpn-ai/darpan-hotwax` | `main` | `v1.2.0` |
+| shopify-darpan | `drpn-ai/shopify-darpan` | `main` | `v0.10.0` |
+| netsuite-darpan | `drpn-ai/netsuite-darpan` | `main` | `v0.6.0` |
+| database-darpan | `drpn-ai/database-darpan` | `main` | `v0.4.0` |
+| moqui-gql | `drpn-ai/moqui-gql` | `main` | `v1.1.0` |
+| darpan-agent | `drpn-ai/darpan-agent` | `main` | `v0.4.0` |
+| moqui-rules | `drpn-ai/moqui-rules` | `main` | `main` (no tag yet; pin its first tag at the release that ships DAR-BE-318) |
 
 Pins move together. A darpan tag's seed data can name services or record fields that exist only in
 a matching component tag, so when `DARPAN_REF` moves, check `DARPAN_HOTWAX_REF`,
 `SHOPIFY_DARPAN_REF`, and the others in the same change. The comments above the `ARG` block in
 `docker/prod/Dockerfile` record why each pairing exists.
-
-darpan `v2.1.2` pairs with darpan-hotwax `v0.10.2`, shopify-darpan `v0.8.2` and netsuite-darpan
-`v0.4.2`: darpan 2.1.2 seeds the payment transaction id fields only those connector tags emit
-(DAR-BE-153), and gorjana R21 reads netsuite-darpan's ITEM_AMOUNT macro (DAR-BE-149). database-darpan
-stays `v0.2.2` and moqui-gql `v0.1.1` (no commits). Deploy the image with darpan-ui `v3.1.2`, and roll
-back as a set (darpan `v2.1.1` set with darpan-ui `v3.1.1`).
 
 ## Edit both Dockerfiles
 
@@ -70,7 +66,8 @@ back as a set (darpan `v2.1.1` set with darpan-ui `v3.1.1`).
 to the component list, the framework ref, config `COPY` lines, JVM flags, the SameSite guard, or the
 build patch must be made in both, or the UAT image stops testing what prod runs. The same applies to
 `docker/entrypoint.sh` and `docker/prod/entrypoint.sh`. Compare them with
-`diff docker/Dockerfile docker/prod/Dockerfile` before committing.
+`diff docker/Dockerfile docker/prod/Dockerfile` before committing. `docker/check-dockerfile-parity.sh`
+(run in CI on every push) fails when the two files clone or jar-build different components.
 
 ## UAT CORS and cookie posture (temporary)
 

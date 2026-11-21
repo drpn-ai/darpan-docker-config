@@ -182,6 +182,12 @@ ARG MOQUI_GQL_REF=v1.1.0
 # v0.4.0 (darpan v3.3.0): the agent's prompts, role models, prices, texts and per-tenant caps are data, and its budgets,
 # timeouts and thresholds are settings (DAR-BE-307, DAR-BE-304). Moves with DARPAN_REF.
 ARG DARPAN_AGENT_REF=v0.4.0
+# moqui-rules (DAR-BE-318): the rules.* entities and services darpan calls, and the ValueChecks class Keep in Spark's
+# LIKE/normalized UDFs load at run time. darpan main depends on it compileOnly, so a darpan ref with DAR-BE-318 does
+# not even configure without it. Nothing depends on it in the build graph, so it has its own jar task below.
+# It has no tag yet, so this floats on main like moqui-gql once did: pin it to moqui-rules' first tag at the release
+# cut whose DARPAN_REF carries DAR-BE-318. darpan v3.3.2 does not reference it; with that pin it is only loaded.
+ARG MOQUI_RULES_REF=main
 
 WORKDIR /
 
@@ -204,6 +210,7 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
     git clone --depth 1 -b "$DATABASE_DARPAN_REF" https://github.com/drpn-ai/database-darpan.git /moqui-framework/runtime/component/database-darpan; \
     git clone --depth 1 -b "$DARPAN_AGENT_REF"    https://github.com/drpn-ai/darpan-agent.git   /moqui-framework/runtime/component/darpan-agent; \
     git clone --depth 1 -b "$MOQUI_GQL_REF"       https://github.com/drpn-ai/moqui-gql.git      /moqui-framework/runtime/component/moqui-gql; \
+    git clone --depth 1 -b "$MOQUI_RULES_REF"     https://github.com/drpn-ai/moqui-rules.git    /moqui-framework/runtime/component/moqui-rules; \
     rm -f /root/.netrc; \
     chown -R 1000:1000 /moqui-framework
 
@@ -269,7 +276,7 @@ RUN --mount=type=cache,id=darpan-gradle-prod,target=/gradle-cache,sharing=locked
         cp -a /gradle-cache/modules-2 /gradle-cache/journal-1 "$GRADLE_USER_HOME/caches/"; \
     fi; \
     mv /tmp/gradle-cache-prune.init.gradle "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
-    ./gradlew --no-daemon :runtime:component:moqui-gql:jar :runtime:component:darpan-agent:jar addRuntime; \
+    ./gradlew --no-daemon :runtime:component:moqui-gql:jar :runtime:component:darpan-agent:jar :runtime:component:moqui-rules:jar addRuntime; \
     rm -f "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
     rm -rf /gradle-cache/modules-2 /gradle-cache/journal-1; \
     cp -a "$GRADLE_USER_HOME/caches/modules-2" "$GRADLE_USER_HOME/caches/journal-1" /gradle-cache/; \
