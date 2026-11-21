@@ -1409,6 +1409,31 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [!Ref AlertTopic]
 
+  TaskCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasTask
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Catches a pinned CPU (runaway loop, GC thrash), not run load. Automation ticks burst to ~99% for a minute or
+          two and fall back, so the 1-minute Maximum is noise; over 14 days (2026-11-07..21) the 5-minute Average never
+          passed 90% and passed 70% once, so 80% for three periods would have fired zero times (DAR-OPS-023)
+    Properties:
+      AlarmDescription: Darpan task CPU averaged above 80% for 15 minutes
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - { Name: ClusterName, Value: !Ref Cluster }
+        - { Name: ServiceName, Value: !GetAtt Service.Name }
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
   DbCpuAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -1532,6 +1557,117 @@ Resources:
       AlarmActions: [!Ref AlertTopic]
       OKActions: [!Ref AlertTopic]
 
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          One page of system usage on the free AWS/ECS, AWS/ApplicationELB, AWS/RDS and AWS/EC2 metrics (Container
+          Insights stays off). Horizontal lines are the alarm thresholds above (DAR-OPS-023)
+        must:
+          - no Condition; StackUpdateRole has no cloudwatch dashboard rights, so a dashboard that a routine deploy
+            or start/stop (DesiredCount) would create, change or delete fails that deploy. Change it only through an
+            InfraChangeRole change set
+          - stay within ~50 metrics (CloudWatch free tier is 3 dashboards of up to 50 metrics each)
+          - keep threshold lines equal to the alarms' thresholds
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-system'
+      DashboardBody: !Sub |
+        {
+          "start": "-PT24H",
+          "periodOverride": "inherit",
+          "widgets": [
+            {"type": "metric", "x": 0, "y": 0, "width": 8, "height": 6, "properties": {
+              "title": "Task CPU (%)", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/ECS", "CPUUtilization", "ClusterName", "${Cluster}", "ServiceName", "${Service.Name}", {"stat": "Average", "label": "Average"}],
+                ["...", {"stat": "Maximum", "label": "Peak"}]
+              ],
+              "yAxis": {"left": {"min": 0, "max": 100}},
+              "annotations": {"horizontal": [{"value": 80, "label": "TaskCpuAlarm (avg, 15 min)"}]}}},
+            {"type": "metric", "x": 8, "y": 0, "width": 8, "height": 6, "properties": {
+              "title": "Task memory (%)", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/ECS", "MemoryUtilization", "ClusterName", "${Cluster}", "ServiceName", "${Service.Name}", {"stat": "Average", "label": "Average"}],
+                ["...", {"stat": "Maximum", "label": "Peak"}]
+              ],
+              "yAxis": {"left": {"min": 0, "max": 100}},
+              "annotations": {"horizontal": [{"value": 92, "label": "TaskMemoryAlarm"}]}}},
+            {"type": "metric", "x": 16, "y": 0, "width": 8, "height": 6, "properties": {
+              "title": "Healthy tasks", "region": "${AWS::Region}", "view": "timeSeries", "period": 60,
+              "metrics": [
+                ["AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", "${TargetGroup.TargetGroupFullName}", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", {"stat": "Minimum", "label": "Healthy"}]
+              ],
+              "yAxis": {"left": {"min": 0}},
+              "annotations": {"horizontal": [{"value": 1, "label": "NoHealthyTaskAlarm below"}]}}},
+            {"type": "metric", "x": 0, "y": 6, "width": 8, "height": 6, "properties": {
+              "title": "Requests", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", {"stat": "Sum", "label": "Requests"}]
+              ],
+              "yAxis": {"left": {"min": 0}}}},
+            {"type": "metric", "x": 8, "y": 6, "width": 8, "height": 6, "properties": {
+              "title": "Server errors (5xx per 5 min)", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", {"stat": "Sum", "label": "Moqui 5xx"}],
+                ["AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", {"stat": "Sum", "label": "Load balancer 5xx"}]
+              ],
+              "yAxis": {"left": {"min": 0}},
+              "annotations": {"horizontal": [{"value": 25, "label": "5xx alarms"}]}}},
+            {"type": "metric", "x": 16, "y": 6, "width": 8, "height": 6, "properties": {
+              "title": "Response time (s)", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", {"stat": "p50", "label": "p50"}],
+                ["...", {"stat": "p99", "label": "p99"}]
+              ],
+              "yAxis": {"left": {"min": 0}}}},
+            {"type": "metric", "x": 0, "y": 12, "width": 8, "height": 6, "properties": {
+              "title": "Database CPU (%) and credits", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "${Database}", {"stat": "Average", "label": "CPU"}],
+                ["AWS/RDS", "CPUCreditBalance", "DBInstanceIdentifier", "${Database}", {"stat": "Minimum", "label": "CPU credits", "yAxis": "right"}]
+              ],
+              "yAxis": {"left": {"min": 0, "max": 100}, "right": {"min": 0}},
+              "annotations": {"horizontal": [{"value": 80, "label": "DbCpuAlarm"}]}}},
+            {"type": "metric", "x": 8, "y": 12, "width": 8, "height": 6, "properties": {
+              "title": "Database connections", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "${Database}", {"stat": "Maximum", "label": "Connections"}]
+              ],
+              "yAxis": {"left": {"min": 0, "max": 200}},
+              "annotations": {"horizontal": [{"value": 170, "label": "DbConnectionsAlarm (max 200)"}]}}},
+            {"type": "metric", "x": 16, "y": 12, "width": 8, "height": 6, "properties": {
+              "title": "Database free memory (MiB)", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                [{"expression": "m1 / 1048576", "label": "Freeable memory", "id": "e1"}],
+                ["AWS/RDS", "FreeableMemory", "DBInstanceIdentifier", "${Database}", {"stat": "Minimum", "id": "m1", "visible": false}]
+              ],
+              "yAxis": {"left": {"min": 0}}}},
+            {"type": "metric", "x": 0, "y": 18, "width": 8, "height": 6, "properties": {
+              "title": "Database free storage (GiB)", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                [{"expression": "m1 / 1073741824", "label": "Free storage", "id": "e1"}],
+                ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", "${Database}", {"stat": "Minimum", "id": "m1", "visible": false}]
+              ],
+              "yAxis": {"left": {"min": 0}},
+              "annotations": {"horizontal": [{"value": 2, "label": "DbFreeStorageAlarm"}]}}},
+            {"type": "metric", "x": 8, "y": 18, "width": 8, "height": 6, "properties": {
+              "title": "Database IOPS", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/RDS", "ReadIOPS", "DBInstanceIdentifier", "${Database}", {"stat": "Average", "label": "Read"}],
+                ["AWS/RDS", "WriteIOPS", "DBInstanceIdentifier", "${Database}", {"stat": "Average", "label": "Write"}]
+              ],
+              "yAxis": {"left": {"min": 0}}}},
+            {"type": "metric", "x": 16, "y": 18, "width": 8, "height": 6, "properties": {
+              "title": "NAT instance (outbound)", "region": "${AWS::Region}", "view": "timeSeries", "period": 300,
+              "metrics": [
+                ["AWS/EC2", "CPUUtilization", "InstanceId", "${NatInstance}", {"stat": "Maximum", "label": "CPU %"}],
+                ["AWS/EC2", "StatusCheckFailed", "InstanceId", "${NatInstance}", {"stat": "Maximum", "label": "Status check failed", "yAxis": "right"}]
+              ],
+              "yAxis": {"left": {"min": 0, "max": 100}, "right": {"min": 0, "max": 1}}}}
+          ]
+        }
+
   # ---------- Cost guard ----------
   MonthlyBudget:
     Type: AWS::Budgets::Budget
@@ -1565,6 +1701,9 @@ Outputs:
     Value: !GetAtt Database.Endpoint.Address
   AlertTopicArn:
     Value: !Ref AlertTopic
+  DashboardUrl:
+    Description: System usage dashboard (DAR-OPS-023)
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards/dashboard/${Dashboard}'
   NatPublicIp:
     Description: The fixed outbound IP every partner call comes from; give this to partners to allowlist
     Value: !Ref NatEip
