@@ -193,7 +193,7 @@ ARG DARPAN_AGENT_REF=v0.5.0
 ARG MOQUI_RULES_REF=v0.2.0
 # moqui-jexl (DAR-BE-334): tenant queries' sandbox, read step and deliveries. A darpan ref with DAR-BE-334 declares
 # depends-on moqui-jexl, so it does not start without it; older darpan refs only load it. Own jar task below.
-ARG MOQUI_JEXL_REF=v0.2.1
+ARG MOQUI_JEXL_REF=v0.2.2
 
 WORKDIR /
 

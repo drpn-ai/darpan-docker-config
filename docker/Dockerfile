@@ -88,7 +88,7 @@ ARG MOQUI_GQL_REF=main
 # moqui-rules (DAR-BE-318): the rules.* entities and services darpan calls; nothing depends on it, so it has its own jar task below.
 ARG MOQUI_RULES_REF=main
 # moqui-jexl (DAR-BE-334): tenant queries' sandbox, read step and deliveries; darpan depends on it, built by its own jar task below.
-ARG MOQUI_JEXL_REF=v0.2.1
+ARG MOQUI_JEXL_REF=v0.2.2
 
 WORKDIR /
 
