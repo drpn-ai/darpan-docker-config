@@ -80,7 +80,9 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan v3.4.0: peak periods and sync pulse (DAR-BE-328); one Keep decision in Spark after every read (DAR-BE-318).
 # It moves with darpan-hotwax v1.3.0, netsuite-darpan v0.7.0, shopify-darpan v0.11.0, darpan-agent v0.5.0 and moqui-rules
 # v0.2.0: the system extractors no longer filter at the read, so no image may mix 3.4.0 core with older system repos.
-ARG DARPAN_REF=v3.4.0
+# 3.4.1 (DAR-BE-338, hotfix): automations keep their own filters again. Moves only DARPAN_REF; the 3.4.0 note stands
+# for the rest.
+ARG DARPAN_REF=v3.4.1
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
