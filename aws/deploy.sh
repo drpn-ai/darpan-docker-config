@@ -308,7 +308,10 @@ log "change set $CS on $STACK:"
 aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$CS" \
   --query 'Changes[].ResourceChange.[Action,LogicalResourceId,ResourceType,Replacement]' --output text \
   | tee "$WORK/changes" | sed 's/^/    /'
-ALLOWED="TaskDefinition Service NoHealthyTaskAlarm TaskMemoryAlarm AlbSecurityGroup"
+# Dashboard and TaskCpuAlarm (DAR-OPS-023) read the Service (!GetAtt Service.Name / the service in the dashboard body),
+# so every deploy that modifies the Service lists them as conditionally modified with no value change, exactly like
+# TaskMemoryAlarm. Anything else is an infra change and still stops here. Approved by Aditi 2026-11-23.
+ALLOWED="TaskDefinition Service NoHealthyTaskAlarm TaskMemoryAlarm TaskCpuAlarm Dashboard AlbSecurityGroup"
 unexpected=$(awk -v ok=" $ALLOWED " 'index(ok, " " $2 " ") == 0 { print $2 }' "$WORK/changes")
 if [ -n "$unexpected" ]; then
   aws cloudformation delete-change-set --stack-name "$STACK" --change-set-name "$CS" >/dev/null 2>&1 || true
