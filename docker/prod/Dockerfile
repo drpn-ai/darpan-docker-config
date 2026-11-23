@@ -84,7 +84,10 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # for the rest.
 # 3.4.2 (DAR-BE-341, DAR-BE-339, hotfix): Run now reads both sides in the run's tenant; every unmatched exchange is
 # looked up. Moves only DARPAN_REF.
-ARG DARPAN_REF=v3.4.2
+# 3.4.3 (DAR-UI-138, DAR-BE-344, hotfix): per-user pinned queries (save#TenantQueryPins); moves NETSUITE_DARPAN_REF to
+# v0.7.1 with it: SALES_LINES reads LINE_SUM / LINE_ITEMS as order sub-selects, which the Malbon and Gorjana R4/R1
+# conclusion packs read. The other pins stay at their 3.4.0 tags.
+ARG DARPAN_REF=v3.4.3
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
@@ -161,7 +164,7 @@ ARG DARPAN_REF=v3.4.2
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
 ARG DARPAN_HOTWAX_REF=v1.3.0
 ARG SHOPIFY_DARPAN_REF=v0.11.0
-ARG NETSUITE_DARPAN_REF=v0.7.0
+ARG NETSUITE_DARPAN_REF=v0.7.1
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
