@@ -191,6 +191,9 @@ ARG DARPAN_AGENT_REF=v0.5.0
 # not even configure without it. Nothing depends on it in the build graph, so it has its own jar task below.
 # v0.2.0 (first tag, darpan v3.4.0): rules.* entities, bulk convert#Facts. Moves with DARPAN_REF.
 ARG MOQUI_RULES_REF=v0.2.0
+# moqui-jexl (DAR-BE-334): tenant queries' sandbox, read step and deliveries. A darpan ref with DAR-BE-334 declares
+# depends-on moqui-jexl, so it does not start without it; older darpan refs only load it. Own jar task below.
+ARG MOQUI_JEXL_REF=v0.2.1
 
 WORKDIR /
 
@@ -214,6 +217,7 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc.secret,required=false \
     git clone --depth 1 -b "$DARPAN_AGENT_REF"    https://github.com/drpn-ai/darpan-agent.git   /moqui-framework/runtime/component/darpan-agent; \
     git clone --depth 1 -b "$MOQUI_GQL_REF"       https://github.com/drpn-ai/moqui-gql.git      /moqui-framework/runtime/component/moqui-gql; \
     git clone --depth 1 -b "$MOQUI_RULES_REF"     https://github.com/drpn-ai/moqui-rules.git    /moqui-framework/runtime/component/moqui-rules; \
+    git clone --depth 1 -b "$MOQUI_JEXL_REF"      https://github.com/drpn-ai/moqui-jexl.git     /moqui-framework/runtime/component/moqui-jexl; \
     rm -f /root/.netrc; \
     chown -R 1000:1000 /moqui-framework
 
@@ -279,7 +283,7 @@ RUN --mount=type=cache,id=darpan-gradle-prod,target=/gradle-cache,sharing=locked
         cp -a /gradle-cache/modules-2 /gradle-cache/journal-1 "$GRADLE_USER_HOME/caches/"; \
     fi; \
     mv /tmp/gradle-cache-prune.init.gradle "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
-    ./gradlew --no-daemon :runtime:component:moqui-gql:jar :runtime:component:darpan-agent:jar :runtime:component:moqui-rules:jar addRuntime; \
+    ./gradlew --no-daemon :runtime:component:moqui-gql:jar :runtime:component:darpan-agent:jar :runtime:component:moqui-rules:jar :runtime:component:moqui-jexl:jar addRuntime; \
     rm -f "$GRADLE_USER_HOME/init.d/gradle-cache-prune.gradle"; \
     rm -rf /gradle-cache/modules-2 /gradle-cache/journal-1; \
     cp -a "$GRADLE_USER_HOME/caches/modules-2" "$GRADLE_USER_HOME/caches/journal-1" /gradle-cache/; \
