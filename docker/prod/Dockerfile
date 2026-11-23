@@ -77,7 +77,10 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # darpan history was reset 2026-07-03 (repo detached from the hotwax fork network); pre-reset tags
 # no longer exist on the remote. v1.0.0 is the first post-reset tag — never fall back to v1.x/v2.x
 # pre-reset refs.
-ARG DARPAN_REF=v3.3.2
+# darpan v3.4.0: peak periods and sync pulse (DAR-BE-328); one Keep decision in Spark after every read (DAR-BE-318).
+# It moves with darpan-hotwax v1.3.0, netsuite-darpan v0.7.0, shopify-darpan v0.11.0, darpan-agent v0.5.0 and moqui-rules
+# v0.2.0: the system extractors no longer filter at the read, so no image may mix 3.4.0 core with older system repos.
+ARG DARPAN_REF=v3.4.0
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
@@ -152,9 +155,9 @@ ARG DARPAN_REF=v3.3.2
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
 # darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
-ARG DARPAN_HOTWAX_REF=v1.2.0
-ARG SHOPIFY_DARPAN_REF=v0.10.0
-ARG NETSUITE_DARPAN_REF=v0.6.0
+ARG DARPAN_HOTWAX_REF=v1.3.0
+ARG SHOPIFY_DARPAN_REF=v0.11.0
+ARG NETSUITE_DARPAN_REF=v0.7.0
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
@@ -181,13 +184,13 @@ ARG MOQUI_GQL_REF=v1.1.0
 # v0.1.2 (darpan v3.0.2): write#AuditRunWords, Claude Haiku's headline and fix lines for the run update (DAR-BE-207).
 # v0.4.0 (darpan v3.3.0): the agent's prompts, role models, prices, texts and per-tenant caps are data, and its budgets,
 # timeouts and thresholds are settings (DAR-BE-307, DAR-BE-304). Moves with DARPAN_REF.
-ARG DARPAN_AGENT_REF=v0.4.0
+# v0.5.0 (darpan v3.4.0): audit read review raises read-economy tickets (DAR-BE-320). Moves with DARPAN_REF.
+ARG DARPAN_AGENT_REF=v0.5.0
 # moqui-rules (DAR-BE-318): the rules.* entities and services darpan calls, and the ValueChecks class Keep in Spark's
 # LIKE/normalized UDFs load at run time. darpan main depends on it compileOnly, so a darpan ref with DAR-BE-318 does
 # not even configure without it. Nothing depends on it in the build graph, so it has its own jar task below.
-# It has no tag yet, so this floats on main like moqui-gql once did: pin it to moqui-rules' first tag at the release
-# cut whose DARPAN_REF carries DAR-BE-318. darpan v3.3.2 does not reference it; with that pin it is only loaded.
-ARG MOQUI_RULES_REF=main
+# v0.2.0 (first tag, darpan v3.4.0): rules.* entities, bulk convert#Facts. Moves with DARPAN_REF.
+ARG MOQUI_RULES_REF=v0.2.0
 
 WORKDIR /
 
