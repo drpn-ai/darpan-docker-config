@@ -332,13 +332,22 @@ Resources:
                   StringEquals:
                     'aws:ResourceTag/aws:cloudformation:stack-name': !Ref AppStackName
                     'aws:ResourceTag/aws:cloudformation:logical-id': AlbSecurityGroup
+              # The Dashboard (DAR-OPS-023) reads !GetAtt TargetGroup.TargetGroupFullName and
+              # LoadBalancer.LoadBalancerFullName, which CloudFormation re-resolves on every deploy that modifies the
+              # Service; resolving them calls the ELB describe APIs below. Without DescribeTargetHealth the v3.4.1
+              # deploys of 2026-11-23 rolled back on the Dashboard. Read-only; ELB describes support no resource scoping.
               - Sid: Reads
                 Effect: Allow
                 Action:
                   - ec2:DescribeSecurityGroups
                   - ec2:DescribeSecurityGroupRules
                   - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetGroupAttributes
+                  - elasticloadbalancing:DescribeTargetHealth
                   - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeLoadBalancerAttributes
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:DescribeTags
                 Resource: '*'
               - Sid: ReadAppDatabase
                 Effect: Allow
