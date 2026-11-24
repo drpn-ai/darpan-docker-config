@@ -87,7 +87,11 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # 3.4.3 (DAR-UI-138, DAR-BE-344, hotfix): per-user pinned queries (save#TenantQueryPins); moves NETSUITE_DARPAN_REF to
 # v0.7.1 with it: SALES_LINES reads LINE_SUM / LINE_ITEMS as order sub-selects, which the Malbon and Gorjana R4/R1
 # conclusion packs read. The other pins stay at their 3.4.0 tags.
-ARG DARPAN_REF=v3.4.3
+# 3.4.4 (backend hotfix: DAR-BE-351 regular runs look up every missing row, DAR-BE-347, DAR-BE-348 audit priorities,
+# DAR-BE-350, DAR-BE-252, DAR-BE-340, DAR-OPS-015): moves MOQUI_GQL_REF to v1.1.1 (audit priority in the schema, which
+# darpan 3.4.4's report and findings serve), DARPAN_AGENT_REF to v0.5.1 (send#AgentTurn takes the statement darpan
+# 3.4.4 sends) and DATABASE_DARPAN_REF to v0.4.1 (PostgreSQL driver 42.7.15). The other pins stay.
+ARG DARPAN_REF=v3.4.4
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
@@ -174,13 +178,13 @@ ARG NETSUITE_DARPAN_REF=v0.7.1
 # darpan v2.1.0; it compiles against it unchanged.
 # v0.2.2 (darpan v2.1.1): another tenant's database source answers exactly like a missing one (DAR-BE-135).
 # No commits for darpan v2.1.2; it compiles against it unchanged.
-ARG DATABASE_DARPAN_REF=v0.4.0
+ARG DATABASE_DARPAN_REF=v0.4.1
 # moqui-gql v0.1.0 (first tag, with darpan v2.1.0): darpan 2.1's audit report, finding and findings roots
 # need it, and the report it serves has no extendedThru. Moves with DARPAN_REF.
 # v0.1.1 (darpan v2.1.1): tenant admins mint API keys for their own tenant (DAR-BE-136); public API
 # paths refuse cookies (DAR-DOCS-005).
 # No commits for darpan v2.1.2; v0.1.1 serves it unchanged.
-ARG MOQUI_GQL_REF=v1.1.0
+ARG MOQUI_GQL_REF=v1.1.1
 # darpan-agent (DAR-BE-159): the embedded Claude agent. Off unless DARPAN_AGENT_ENABLED=true AND a tenant has
 # agentEnabled=Y; it reads ANTHROPIC_API_KEY from the container env at run time (never baked into the image). Like
 # moqui-gql it compileOnly-depends on darpan, so it is built by its own jar task below.
@@ -192,7 +196,7 @@ ARG MOQUI_GQL_REF=v1.1.0
 # v0.4.0 (darpan v3.3.0): the agent's prompts, role models, prices, texts and per-tenant caps are data, and its budgets,
 # timeouts and thresholds are settings (DAR-BE-307, DAR-BE-304). Moves with DARPAN_REF.
 # v0.5.0 (darpan v3.4.0): audit read review raises read-economy tickets (DAR-BE-320). Moves with DARPAN_REF.
-ARG DARPAN_AGENT_REF=v0.5.0
+ARG DARPAN_AGENT_REF=v0.5.1
 # moqui-rules (DAR-BE-318): the rules.* entities and services darpan calls, and the ValueChecks class Keep in Spark's
 # LIKE/normalized UDFs load at run time. darpan main depends on it compileOnly, so a darpan ref with DAR-BE-318 does
 # not even configure without it. Nothing depends on it in the build graph, so it has its own jar task below.
