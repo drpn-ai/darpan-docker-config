@@ -99,7 +99,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # status, DAR-BE-357, DAR-BE-355): moves DARPAN_HOTWAX_REF to v1.3.2 (HotWax order reads take changedSince, which
 # darpan 3.4.6's audit re-check passes, DAR-BE-356) and SHOPIFY_DARPAN_REF to v0.11.1 (the completed-returns read
 # carries the order's status, total and dates, DAR-BE-359). The other pins stay.
-ARG DARPAN_REF=v3.4.7
+ARG DARPAN_REF=v3.4.8
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
@@ -174,7 +174,7 @@ ARG DARPAN_REF=v3.4.7
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
 # darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
-ARG DARPAN_HOTWAX_REF=v1.3.3
+ARG DARPAN_HOTWAX_REF=v1.3.4
 ARG SHOPIFY_DARPAN_REF=v0.11.2
 ARG NETSUITE_DARPAN_REF=v0.7.1
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
