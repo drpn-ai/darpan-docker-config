@@ -91,7 +91,11 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # DAR-BE-350, DAR-BE-252, DAR-BE-340, DAR-OPS-015): moves MOQUI_GQL_REF to v1.1.1 (audit priority in the schema, which
 # darpan 3.4.4's report and findings serve), DARPAN_AGENT_REF to v0.5.1 (send#AgentTurn takes the statement darpan
 # 3.4.4 sends) and DATABASE_DARPAN_REF to v0.4.1 (PostgreSQL driver 42.7.15). The other pins stay.
-ARG DARPAN_REF=v3.4.4
+# 3.4.5 (backend hotfix: DAR-BE-353 each statement lists only the causes it can reach, DAR-BE-354 Shopify orders aged so
+# the brain's 24 h grace reaches them): moves DARPAN_HOTWAX_REF to v1.3.1 with it (a HotWax orders run side can keep
+# exchange orders, DAR-BE-345; the returns read reads by the return's Shopify order id, DAR-BE-352). darpan 3.4.5's
+# upgrade data carries v1.3.1's OMS_GQL connector row. The other pins stay.
+ARG DARPAN_REF=v3.4.5
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
@@ -166,7 +170,7 @@ ARG DARPAN_REF=v3.4.4
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
 # darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
-ARG DARPAN_HOTWAX_REF=v1.3.0
+ARG DARPAN_HOTWAX_REF=v1.3.1
 ARG SHOPIFY_DARPAN_REF=v0.11.0
 ARG NETSUITE_DARPAN_REF=v0.7.1
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
