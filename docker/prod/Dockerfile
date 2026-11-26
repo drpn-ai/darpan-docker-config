@@ -103,7 +103,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # DARPAN_REF only. The other pins stay.
 # 3.5.1 (DAR-BE-377: the sync pulse reads Shopify orders upstream; DAR-BE-378: errors never reach client chat rooms):
 # moves DARPAN_REF only. The other pins stay.
-ARG DARPAN_REF=v3.5.2
+ARG DARPAN_REF=v3.5.3
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
@@ -178,13 +178,15 @@ ARG DARPAN_REF=v3.5.2
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
 # darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
+# darpan v3.5.3 moves darpan-hotwax v1.4.1 and netsuite-darpan v0.8.1 with it (DAR-BE-320): netsuite-darpan's audit read by change
+# calls darpan-hotwax's read#HotWaxOmsChangedOrderIds, so the two move together; shopify-darpan stays at v0.12.0.
 # darpan v3.5.0 moves darpan-hotwax v1.4.0, shopify-darpan v0.12.0 and netsuite-darpan v0.8.0 with it: they carry the ID
 # index's sources and drop the live lookup's read rows (DAR-BE-374); darpan 3.5.0's index reads nothing without them.
 # darpan v3.4.13 moves darpan-hotwax v1.3.5, shopify-darpan v0.11.3 and netsuite-darpan v0.7.2 with it: they carry the
 # order lookup's product reads and links (DAR-CLI-008 part 3), and darpan's lookup#Order finds nothing without them.
-ARG DARPAN_HOTWAX_REF=v1.4.0
+ARG DARPAN_HOTWAX_REF=v1.4.1
 ARG SHOPIFY_DARPAN_REF=v0.12.0
-ARG NETSUITE_DARPAN_REF=v0.8.0
+ARG NETSUITE_DARPAN_REF=v0.8.1
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
