@@ -103,7 +103,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # DARPAN_REF only. The other pins stay.
 # 3.5.1 (DAR-BE-377: the sync pulse reads Shopify orders upstream; DAR-BE-378: errors never reach client chat rooms):
 # moves DARPAN_REF only. The other pins stay.
-ARG DARPAN_REF=v3.5.4
+ARG DARPAN_REF=v3.5.5
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
