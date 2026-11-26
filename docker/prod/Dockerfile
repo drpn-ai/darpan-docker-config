@@ -101,7 +101,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # carries the order's status, total and dates, DAR-BE-359). The other pins stay.
 # 3.4.9 (backend + app 4.4.11: DAR-BE-361 acknowledge findings + feedback to Darpan, DAR-BE-369 Re-check all): moves
 # DARPAN_REF only. The other pins stay.
-ARG DARPAN_REF=v3.4.13
+ARG DARPAN_REF=v3.4.14
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
