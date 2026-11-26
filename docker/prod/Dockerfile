@@ -101,7 +101,7 @@ ARG MOQUI_SFTP_REF=v1.0.3
 # carries the order's status, total and dates, DAR-BE-359). The other pins stay.
 # 3.4.9 (backend + app 4.4.11: DAR-BE-361 acknowledge findings + feedback to Darpan, DAR-BE-369 Re-check all): moves
 # DARPAN_REF only. The other pins stay.
-ARG DARPAN_REF=v3.4.12
+ARG DARPAN_REF=v3.4.13
 # darpan v3.3.1 (hotfix, tagged off main: v3.3.0 + a run's reads ask for its conclusion tree's fields, DAR-CLIENT-006)
 # moves only DARPAN_REF; the 3.3.0 note stands for the rest.
 # darpan v3.3.0 (minor, facade contract 4: 33 methods added; emails, settings, jobs, retention, mascot words and the
@@ -176,9 +176,11 @@ ARG DARPAN_REF=v3.4.12
 # darpan v2.1.9 moves alone: rule batches are released once run and matched pairs come 2,000 at a time (DAR-BE-166).
 # darpan v2.1.10 moves alone: a conclusion tree saves on a compare scope with no scopeMode (DAR-BE-168).
 # darpan v2.1.11 moves alone: an audit's first play runs (DAR-BE-172); a lookup can attach every record under a key (DAR-BE-174).
-ARG DARPAN_HOTWAX_REF=v1.3.4
-ARG SHOPIFY_DARPAN_REF=v0.11.2
-ARG NETSUITE_DARPAN_REF=v0.7.1
+# darpan v3.4.13 moves darpan-hotwax v1.3.5, shopify-darpan v0.11.3 and netsuite-darpan v0.7.2 with it: they carry the
+# order lookup's product reads and links (DAR-CLI-008 part 3), and darpan's lookup#Order finds nothing without them.
+ARG DARPAN_HOTWAX_REF=v1.3.5
+ARG SHOPIFY_DARPAN_REF=v0.11.3
+ARG NETSUITE_DARPAN_REF=v0.7.2
 # Added for v1.5.0. This image did not carry database-darpan before, while the UAT Dockerfile did.
 # v1.5.0's upgrade data seeds an enabled DATABASE SourceSystemConnector row whose extractService
 # names reconciliation.DatabaseExtractionServices.extract#DatabaseRecords — a service that lives
