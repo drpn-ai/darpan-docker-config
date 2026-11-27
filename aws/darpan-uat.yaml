@@ -88,7 +88,9 @@ Parameters:
     Description: >-
       ARN of a UAT-owned DB snapshot (a copy of prod's, DAR-OPS-027) to build the database from. Changing it
       REPLACES the database (the old one leaves a final snapshot). Once set, keep it set on every update:
-      clearing it also replaces the database, with an empty one.
+      clearing it also replaces the database, with an empty one. ORDER (not enforced by this template): change
+      it only together with DesiredCount=0, run aws/uat-clone-scrub.sql on the restored database and see its
+      read-back all 0, THEN set DesiredCount=1. Booting first would post to clients' chat rooms and send email.
 
 Conditions:
   HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
