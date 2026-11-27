@@ -75,10 +75,26 @@ Parameters:
   MonthlyBudgetUsd:
     Type: Number
     Default: 80
+  SchedulerEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      false sets scheduled_job_check_time=0, so Moqui runs no scheduled job (no automations, pulses or audits).
+      UAT is a clone of prod (DAR-OPS-027): leave false, or every client's automations run twice.
+  DbSnapshotIdentifier:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of a UAT-owned DB snapshot (a copy of prod's, DAR-OPS-027) to build the database from. Changing it
+      REPLACES the database (the old one leaves a final snapshot). Once set, keep it set on every update:
+      clearing it also replaces the database, with an empty one.
 
 Conditions:
   HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
   HasHostName: !Not [!Equals [!Ref HostName, '']]
+  SchedulerOff: !Equals [!Ref SchedulerEnabled, 'false']
+  FromSnapshot: !Not [!Equals [!Ref DbSnapshotIdentifier, '']]
 
 Resources:
   # ---------- Network ----------
@@ -286,13 +302,15 @@ Resources:
       Engine: mysql
       EngineVersion: '8.4'
       DBInstanceClass: !Ref DbInstanceClass
-      DBName: darpan
-      MasterUsername: darpanadmin
+      # A snapshot restore inherits the database name, master user and encryption from the snapshot.
+      DBSnapshotIdentifier: !If [FromSnapshot, !Ref DbSnapshotIdentifier, !Ref AWS::NoValue]
+      DBName: !If [FromSnapshot, !Ref AWS::NoValue, darpan]
+      MasterUsername: !If [FromSnapshot, !Ref AWS::NoValue, darpanadmin]
       ManageMasterUserPassword: true
       AllocatedStorage: '20'
       MaxAllocatedStorage: 100
       StorageType: gp3
-      StorageEncrypted: true
+      StorageEncrypted: !If [FromSnapshot, !Ref AWS::NoValue, true]
       MultiAZ: false
       PubliclyAccessible: false
       DBSubnetGroupName: !Ref DbSubnetGroup
@@ -527,6 +545,11 @@ Resources:
             - { Name: TIME_ZONE, Value: !Ref TimeZone }
             - { Name: DARPAN_LOAD_UPGRADE_DATA, Value: 'Y' }
             - { Name: DARPAN_UPGRADE_DATA_TYPES, Value: !Ref UpgradeDataTypes }
+            # Moqui reads an env var named like a default-property in place of the conf value; 0 = no scheduler.
+            - !If
+              - SchedulerOff
+              - { Name: scheduled_job_check_time, Value: '0' }
+              - !Ref AWS::NoValue
           Secrets:
             - { Name: Moqui_DB_USER, ValueFrom: !Sub '${Database.MasterUserSecret.SecretArn}:username::' }
             - { Name: Moqui_DB_PASSWORD, ValueFrom: !Sub '${Database.MasterUserSecret.SecretArn}:password::' }
